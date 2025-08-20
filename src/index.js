@@ -8,7 +8,9 @@ dotenv.config();
 
 const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
 
-const botToken = process.env.BOT_TOKEN;
+// Читаем токен из переменных окружения и страхуемся от лишних пробелов/переводов строки
+const rawToken = process.env.BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '';
+const botToken = rawToken.trim();
 if (!botToken) {
   logger.error('BOT_TOKEN is required');
   process.exit(1);
