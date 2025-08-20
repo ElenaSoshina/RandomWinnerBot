@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+.npmrc
+.env
+.env.*
+.idea
+Dockerfile*
+docker-compose*
+.DS_Store
+
+
