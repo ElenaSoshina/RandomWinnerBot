@@ -37,7 +37,7 @@ if (agent) {
 const bot = new Telegraf(botToken, telegrafOptions);
 
 bot.start(async (ctx) => {
-  await ctx.reply('Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.');
+  await ctx.reply('Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.  ');
 });
 
 bot.command('ping', async (ctx) => {
