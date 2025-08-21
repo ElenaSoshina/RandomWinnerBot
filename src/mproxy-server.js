@@ -48,6 +48,23 @@ async function ensureClient() {
 
 app.get('/health', (req, res) => res.json({ ok: true }));
 
+// Информация о текущем клиент-аккаунте
+app.get('/me', async (req, res) => {
+  try {
+    const c = await ensureClient();
+    const me = await c.getMe();
+    res.json({
+      user_id: String(me.id),
+      username: me.username || null,
+      first_name: me.firstName || null,
+      last_name: me.lastName || null,
+    });
+  } catch (err) {
+    logger.error({ err }, 'me error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Минимальная выборка участников канала
 app.get('/channels/:idOrUsername/members', async (req, res) => {
   try {
@@ -76,6 +93,27 @@ app.get('/channels/:idOrUsername/members', async (req, res) => {
     res.json(users);
   } catch (err) {
     logger.error({ err }, 'members error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Проверка членства клиент-аккаунта в группе/канале
+app.get('/channels/:idOrUsername/isMember', async (req, res) => {
+  try {
+    const { idOrUsername } = req.params;
+    const c = await ensureClient();
+    const entity = await c.getEntity(idOrUsername);
+    try {
+      await c.invoke(new Api.channels.GetParticipant({
+        channel: entity,
+        participant: new Api.InputPeerSelf(),
+      }));
+      return res.json({ ok: true, is_member: true });
+    } catch (e) {
+      return res.json({ ok: true, is_member: false });
+    }
+  } catch (err) {
+    logger.error({ err }, 'isMember error');
     res.status(500).json({ error: err.message });
   }
 });

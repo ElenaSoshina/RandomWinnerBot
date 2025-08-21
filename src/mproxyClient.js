@@ -88,6 +88,18 @@ export class MProxyClient {
     }
     return res.json();
   }
+
+  async me() {
+    const res = await fetch(`${this.baseUrl}/me`, { headers: { Authorization: `Bearer ${this.token}` } });
+    if (!res.ok) throw new Error(`MProxy /me error ${res.status}`);
+    return res.json();
+  }
+
+  async isMember(target) {
+    const res = await fetch(`${this.baseUrl}/channels/${encodeURIComponent(target)}/isMember`, { headers: { Authorization: `Bearer ${this.token}` } });
+    if (!res.ok) throw new Error(`MProxy isMember error ${res.status}`);
+    return res.json();
+  }
 }
 
 export function buildMProxyFromEnv() {

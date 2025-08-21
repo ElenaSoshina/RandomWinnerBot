@@ -196,11 +196,29 @@ bot.on('text', async (ctx, next) => {
     if (st.action === 'ask_target') {
       // Подключаем клиента к цели, затем переключаемся на следующий сценарий
       const target = text;
-      await ctx.reply('Подключаю клиента к группе/каналу...');
-      await mproxy.joinTarget(target);
+      await ctx.reply('Проверяю права и подключение...');
+      // Информация о боте и клиенте
+      const botMe = await ctx.telegram.getMe();
+      const clientMe = await mproxy.me().catch(() => null);
+      // Проверка прав бота (доступность чата и статус)
+      let botStatus = 'не в канале';
+      try {
+        const chat = await ctx.telegram.getChat(target);
+        const member = await ctx.telegram.getChatMember(chat.id, botMe.id);
+        botStatus = member.status;
+      } catch (e) {
+        // игнорируем, попросим выдать права вручную
+      }
+      // Проверка членства клиента
+      const clientMember = await mproxy.isMember(target).catch(() => ({ is_member: false }));
+      if (!clientMember.is_member) {
+        await ctx.reply(`Клиент ${clientMe?.username ? '@' + clientMe.username : clientMe?.first_name || 'аккаунт'} не в группе — добавляю...`);
+        await mproxy.joinTarget(target);
+      }
+      await ctx.reply(`Статус: бот=${botStatus}; клиент=${clientMember.is_member ? 'в группе' : 'добавлен'}`);
       if (st.nextAction === 'members') {
         userState.set(ctx.from.id, { action: 'members', step: 1, data: { channel: target } });
-        return ctx.reply('Подключение выполнено. Укажите limit и offset через пробел, или отправьте пусто для по умолчанию (50 0).');
+        return ctx.reply('Подключение выполнено. Загружаю участников...');
       }
       if (st.nextAction === 'members_all') {
         const channel = target;
