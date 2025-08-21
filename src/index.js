@@ -55,20 +55,19 @@ function escapeHtml(text) {
 
 function formatUserLink(user) {
   const id = escapeHtml(user.user_id);
-  const hasName = Boolean(user.first_name || user.last_name);
-  const displayName = hasName
-    ? escapeHtml(`${user.first_name || ''} ${user.last_name || ''}`.trim())
-    : `id:${id}`;
+  const nameTextRaw = `${user.first_name || ''} ${user.last_name || ''}`.trim();
+  const hasName = Boolean(nameTextRaw);
+  const nameText = hasName ? escapeHtml(nameTextRaw) : '';
   if (user.username) {
     const uname = escapeHtml(user.username);
-    return `<a href="https://t.me/${uname}">@${uname}</a> (id:${id})`;
+    return `<a href="https://t.me/${uname}">@${uname}</a>`;
   }
-  const nameSuffix = hasName ? ` (${displayName})` : '';
+  const nameSuffix = hasName ? ` (${nameText})` : '';
   return `<a href="tg://user?id=${id}">id:${id}</a>${nameSuffix}`;
 }
 
 bot.start(async (ctx) => {
-  await showMainMenu(ctx, 'Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.');
+  await showMainMenu(ctx, 'Привет! Я помогу собрать участников и провести розыгрыш. Выберите действие ниже.');
 });
 
 bot.command('ping', async (ctx) => {
@@ -101,6 +100,22 @@ bot.command('draw', async (ctx) => {
   }
 });
 
+// Кнопка массовой отправки сообщений победителям
+bot.action(/msg_winners:.+/, async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  const data = ctx.match.input.split(':')[1];
+  let ids = [];
+  try { ids = JSON.parse(decodeURIComponent(data)); } catch (e) { ids = []; }
+  if (!Array.isArray(ids) || ids.length === 0) {
+    return ctx.reply('Список победителей пуст.');
+  }
+  userState.set(ctx.from.id, { action: 'send_msg', step: 1, data: { ids } });
+  await ctx.reply('Введите текст сообщения для победителей:', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
 bot.command('whois', async (ctx) => {
   const text = ctx.message.text.trim();
   const parts = text.split(/\s+/);
@@ -124,11 +139,7 @@ function mainMenuKeyboard() {
       inline_keyboard: [
         [
           { text: 'Список участников', callback_data: 'menu_members' },
-          { text: 'Все участники', callback_data: 'menu_members_all' },
-        ],
-        [
           { text: 'Розыгрыш', callback_data: 'menu_draw' },
-          { text: 'Whois', callback_data: 'menu_whois' },
         ],
       ],
     },
@@ -148,8 +159,9 @@ bot.action('menu_main', async (ctx) => {
 bot.action('menu_members', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members', data: {} });
-  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или пришлите инвайт‑ссылку). Я добавлю нашего клиента и перейду к действиям.', {
+  // Без пагинации: всегда загружаем всех участников
+  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members_all', data: {} });
+  await ctx.reply('Шаг 1. Введите username группы. Я добавлю нашего клиента и загружу всех участников.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -158,7 +170,7 @@ bot.action('menu_members_all', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
   userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members_all', data: {} });
-  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или инвайт‑ссылку). Подключу клиента и загружу всех участников.', {
+  await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и загружу всех участников.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -167,18 +179,12 @@ bot.action('menu_draw', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
   userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'draw', data: {} });
-  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или инвайт‑ссылку). Подключу клиента и затем попрошу число победителей.', {
+  await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и затем попрошу число победителей.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
 
-bot.action('menu_whois', async (ctx) => {
-  await ctx.answerCbQuery();
-  userState.set(ctx.from.id, { action: 'whois', step: 1, data: {} });
-  await ctx.reply('Введите @username или числовой user id для ссылки на профиль.', {
-    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
-  });
-});
+// Кнопки Whois в меню нет; команда /whois оставлена для отладки по желанию
 
 // Общий обработчик текстов для пошаговых сценариев
 bot.on('text', async (ctx, next) => {
@@ -264,7 +270,13 @@ bot.on('text', async (ctx, next) => {
           await ctx.reply('Не найдено участников для розыгрыша.', mainMenuKeyboard());
         } else {
           const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
-          await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, { disable_web_page_preview: true });
+          const winnersIds = winners.map((u) => u.user_id);
+          await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, {
+            disable_web_page_preview: true,
+            reply_markup: {
+              inline_keyboard: [[{ text: 'Написать победителям', callback_data: `msg_winners:${encodeURIComponent(JSON.stringify(winnersIds))}` }]],
+            },
+          });
         }
         return showMainMenu(ctx, 'Готово.');
       }
@@ -279,6 +291,15 @@ bot.on('text', async (ctx, next) => {
         if (!id) return ctx.reply('Некорректный ввод. Нужен @username или числовой id.');
         await ctx.replyWithHTML(`Профиль: <a href="tg://user?id=${id}">id:${escapeHtml(id)}</a>`, { disable_web_page_preview: true });
       }
+      return showMainMenu(ctx, 'Готово.');
+    }
+
+    if (st.action === 'send_msg') {
+      const ids = st.data.ids || [];
+      const textMessage = text;
+      await ctx.reply('Отправляю сообщения победителям...');
+      const result = await mproxy.sendMessages(ids, textMessage);
+      await ctx.reply(`Отправлено: ${result.sent}/${result.total}`);
       return showMainMenu(ctx, 'Готово.');
     }
   } catch (err) {

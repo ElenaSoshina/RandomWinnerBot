@@ -112,6 +112,36 @@ app.post('/join', async (req, res) => {
   }
 });
 
+// Массовая отправка сообщений от клиент-аккаунта пользователям по их id
+app.post('/sendMessages', async (req, res) => {
+  try {
+    const { user_ids: userIds, text } = req.body || {};
+    if (!Array.isArray(userIds) || userIds.length === 0 || typeof text !== 'string' || !text.trim()) {
+      return res.status(400).json({ error: 'user_ids[] and text are required' });
+    }
+    const c = await ensureClient();
+    const results = [];
+    for (const rawId of userIds) {
+      try {
+        const idNum = BigInt(String(rawId));
+        const entity = await c.getEntity(idNum).catch(async () => {
+          // Fallback: try as number
+          return c.getEntity(Number(String(rawId)));
+        });
+        await c.sendMessage(entity, { message: text });
+        results.push({ user_id: String(rawId), ok: true });
+      } catch (e) {
+        results.push({ user_id: String(rawId), ok: false, error: String(e?.message || e) });
+      }
+    }
+    const okCount = results.filter(r => r.ok).length;
+    return res.json({ ok: true, sent: okCount, total: results.length, results });
+  } catch (err) {
+    logger.error({ err }, 'sendMessages error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export function startMProxyServer() {
   app.listen(PORT, () => logger.info({ PORT }, 'MProxy listening'));
 }

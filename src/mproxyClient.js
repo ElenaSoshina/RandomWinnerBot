@@ -68,6 +68,26 @@ export class MProxyClient {
     }
     return res.json();
   }
+
+  async sendMessages(userIds, text) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const url = `${this.baseUrl}/sendMessages`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ user_ids: userIds, text }),
+    });
+    if (!res.ok) {
+      const textRes = await res.text().catch(() => '');
+      throw new Error(`MProxy sendMessages error ${res.status}: ${textRes}`);
+    }
+    return res.json();
+  }
 }
 
 export function buildMProxyFromEnv() {
