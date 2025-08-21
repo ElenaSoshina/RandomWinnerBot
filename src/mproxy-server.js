@@ -69,6 +69,8 @@ app.get('/channels/:idOrUsername/members', async (req, res) => {
     const users = result.users.map((u) => ({
       user_id: u.id.toString(),
       username: u.username || null,
+      first_name: u.firstName || null,
+      last_name: u.lastName || null,
       is_bot: Boolean(u.bot),
     }));
     res.json(users);

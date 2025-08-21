@@ -42,6 +42,26 @@ if (agent) {
 const bot = new Telegraf(botToken, telegrafOptions);
 const mproxy = buildMProxyFromEnv();
 
+function escapeHtml(text) {
+  return String(text)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;');
+}
+
+function formatUserLink(user) {
+  const id = escapeHtml(user.user_id);
+  const hasName = Boolean(user.first_name || user.last_name);
+  const displayName = hasName
+    ? escapeHtml(`${user.first_name || ''} ${user.last_name || ''}`.trim())
+    : `id:${id}`;
+  if (user.username) {
+    return `@${escapeHtml(user.username)}`;
+  }
+  return `<a href="tg://user?id=${id}">${displayName}</a>`;
+}
+
 bot.start(async (ctx) => {
   await ctx.reply('Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.  ');
 });
@@ -69,8 +89,8 @@ bot.command('draw', async (ctx) => {
     if (!winners.length) {
       return ctx.reply('Не найдено участников для розыгрыша.');
     }
-    const list = winners.map((u, i) => `${i + 1}. ${u.username ? '@' + u.username : u.user_id}`).join('\n');
-    await ctx.reply(`Победители:\n${list}`);
+    const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
+    await ctx.replyWithHTML(`Победители:\n${list}`, { disable_web_page_preview: true });
   } catch (err) {
     return ctx.reply(`Ошибка MProxy: ${err.message}`);
   }
@@ -94,7 +114,7 @@ bot.command('members', async (ctx) => {
     if (!members.length) {
       return ctx.reply('Участники не найдены.');
     }
-    const lines = members.map((u, i) => `${offset + i + 1}. ${u.username ? '@' + u.username : u.user_id}`);
+    const lines = members.map((u, i) => `${offset + i + 1}. ${formatUserLink(u)}`);
     const chunks = [];
     let current = [];
     let len = 0;
@@ -110,7 +130,7 @@ bot.command('members', async (ctx) => {
     if (current.length) chunks.push(current.join('\n'));
     for (const chunk of chunks) {
       // eslint-disable-next-line no-await-in-loop
-      await ctx.reply(chunk);
+      await ctx.replyWithHTML(chunk, { disable_web_page_preview: true });
     }
   } catch (err) {
     return ctx.reply(`Ошибка MProxy: ${err.message}`);
@@ -133,7 +153,7 @@ bot.command('members_all', async (ctx) => {
     if (!members.length) {
       return ctx.reply('Участники не найдены.');
     }
-    const lines = members.map((u, i) => `${i + 1}. ${u.username ? '@' + u.username : u.user_id}`);
+    const lines = members.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
     const chunks = [];
     let current = [];
     let len = 0;
@@ -149,7 +169,7 @@ bot.command('members_all', async (ctx) => {
     if (current.length) chunks.push(current.join('\n'));
     for (const chunk of chunks) {
       // eslint-disable-next-line no-await-in-loop
-      await ctx.reply(chunk);
+      await ctx.replyWithHTML(chunk, { disable_web_page_preview: true });
     }
   } catch (err) {
     return ctx.reply(`Ошибка MProxy: ${err.message}`);
