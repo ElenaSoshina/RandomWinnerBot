@@ -32,6 +32,22 @@ export class MProxyClient {
     }
     return res.json();
   }
+
+  async fetchAllMembers(channelIdOrUsername, { pageSize = 200, hardMax = 20000 } = {}) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const members = [];
+    let offset = 0;
+    while (true) {
+      const page = await this.fetchMembers(channelIdOrUsername, { limit: pageSize, offset });
+      if (!Array.isArray(page) || page.length === 0) break;
+      members.push(...page);
+      offset += page.length;
+      if (members.length >= hardMax) break;
+    }
+    return members;
+  }
 }
 
 export function buildMProxyFromEnv() {

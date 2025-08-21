@@ -117,6 +117,45 @@ bot.command('members', async (ctx) => {
   }
 });
 
+bot.command('members_all', async (ctx) => {
+  if (!mproxy.isEnabled()) {
+    return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  }
+  const text = ctx.message.text.trim();
+  const parts = text.split(/\s+/);
+  if (parts.length < 2) {
+    return ctx.reply('Использование: /members_all <@group|id>');
+  }
+  const channel = parts[1];
+  await ctx.reply(`Загружаю всех участников ${channel} (может занять время)...`);
+  try {
+    const members = await mproxy.fetchAllMembers(channel, { pageSize: 500, hardMax: 100000 });
+    if (!members.length) {
+      return ctx.reply('Участники не найдены.');
+    }
+    const lines = members.map((u, i) => `${i + 1}. ${u.username ? '@' + u.username : u.user_id}`);
+    const chunks = [];
+    let current = [];
+    let len = 0;
+    for (const line of lines) {
+      if (len + line.length + 1 > 3500) {
+        chunks.push(current.join('\n'));
+        current = [];
+        len = 0;
+      }
+      current.push(line);
+      len += line.length + 1;
+    }
+    if (current.length) chunks.push(current.join('\n'));
+    for (const chunk of chunks) {
+      // eslint-disable-next-line no-await-in-loop
+      await ctx.reply(chunk);
+    }
+  } catch (err) {
+    return ctx.reply(`Ошибка MProxy: ${err.message}`);
+  }
+});
+
 bot.catch((err, ctx) => {
   logger.error({ err }, 'Bot error');
 });
