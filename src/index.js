@@ -82,10 +82,8 @@ bot.catch((err, ctx) => {
 
 async function launch() {
   logger.info('Launching bot...');
-  await bot.launch();
-  logger.info('Bot launched');
 
-  // Опциональный запуск встроенного MProxy с гибкой интерпретацией флага
+  // Опциональный запуск встроенного MProxy с гибкой интерпретацией флага — запускаем до бота
   const rawFlag = (process.env.ENABLE_MPROXY || '').trim().toLowerCase();
   const normalizedFlag = rawFlag.replace(/^["']|["']$/g, '');
   const enableMproxy = ['true', '1', 'yes', 'on'].includes(normalizedFlag);
@@ -95,6 +93,9 @@ async function launch() {
   } else {
     logger.info({ ENABLE_MPROXY: process.env.ENABLE_MPROXY }, 'Embedded MProxy disabled');
   }
+
+  await bot.launch();
+  logger.info('Bot launched');
 
   const signals = ['SIGINT', 'SIGTERM', 'SIGQUIT'];
   for (const signal of signals) {
