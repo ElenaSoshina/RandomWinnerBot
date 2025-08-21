@@ -57,7 +57,8 @@ function formatUserLink(user) {
     ? escapeHtml(`${user.first_name || ''} ${user.last_name || ''}`.trim())
     : `id:${id}`;
   if (user.username) {
-    return `@${escapeHtml(user.username)}`;
+    const uname = escapeHtml(user.username);
+    return `<a href="https://t.me/${uname}">@${uname}</a>`;
   }
   return `<a href="tg://user?id=${id}">${displayName}</a>`;
 }
