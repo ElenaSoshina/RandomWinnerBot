@@ -80,6 +80,38 @@ app.get('/channels/:idOrUsername/members', async (req, res) => {
   }
 });
 
+// Присоединение клиент-аккаунта к публичной группе/каналу или по инвайт-ссылке
+app.post('/join', async (req, res) => {
+  try {
+    const { target } = req.body || {};
+    if (!target || typeof target !== 'string') {
+      return res.status(400).json({ error: 'target is required (username or invite link)' });
+    }
+    const c = await ensureClient();
+
+    const t = target.trim();
+    // Инвайт-ссылки вида https://t.me/+HASH или https://t.me/joinchat/HASH
+    const inviteHashMatch = t.match(/[+/]([A-Za-z0-9_-]{16,})$/);
+    if (t.includes('t.me/') && inviteHashMatch) {
+      const hash = inviteHashMatch[1].replace(/^\+/, '');
+      const result = await c.invoke(new Api.messages.ImportChatInvite({ hash }));
+      return res.json({ ok: true, type: 'invite', result: String(result?.className || 'ok') });
+    }
+
+    // Публичные @username или короткие ссылки
+    const username = t.replace(/^@/, '');
+    const entity = await c.getEntity(username).catch(() => null);
+    if (!entity) {
+      return res.status(404).json({ error: 'Target not found' });
+    }
+    await c.invoke(new Api.channels.JoinChannel({ channel: entity }));
+    return res.json({ ok: true, type: 'public', username });
+  } catch (err) {
+    logger.error({ err }, 'join error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export function startMProxyServer() {
   app.listen(PORT, () => logger.info({ PORT }, 'MProxy listening'));
 }

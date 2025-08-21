@@ -148,8 +148,8 @@ bot.action('menu_main', async (ctx) => {
 bot.action('menu_members', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  userState.set(ctx.from.id, { action: 'members', step: 1, data: {} });
-  await ctx.reply('Введите @username группы или -100ID (не канал-трансляция). Опц.: добавьте limit и offset через пробел. Пример: @group 50 0', {
+  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members', data: {} });
+  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или пришлите инвайт‑ссылку). Я добавлю нашего клиента и перейду к действиям.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -157,8 +157,8 @@ bot.action('menu_members', async (ctx) => {
 bot.action('menu_members_all', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  userState.set(ctx.from.id, { action: 'members_all', step: 1, data: {} });
-  await ctx.reply('Введите @username группы или -100ID, загружу всех участников.', {
+  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members_all', data: {} });
+  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или инвайт‑ссылку). Подключу клиента и загружу всех участников.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -166,8 +166,8 @@ bot.action('menu_members_all', async (ctx) => {
 bot.action('menu_draw', async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  userState.set(ctx.from.id, { action: 'draw', step: 1, data: {} });
-  await ctx.reply('Шаг 1/2. Введите @username группы или -100ID, из которой выбирать победителей.', {
+  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'draw', data: {} });
+  await ctx.reply('Шаг 1. Введите @username группы или -100ID (или инвайт‑ссылку). Подключу клиента и затем попрошу число победителей.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -187,10 +187,37 @@ bot.on('text', async (ctx, next) => {
   const text = ctx.message.text.trim();
 
   try {
+    if (st.action === 'ask_target') {
+      // Подключаем клиента к цели, затем переключаемся на следующий сценарий
+      const target = text;
+      await ctx.reply('Подключаю клиента к группе/каналу...');
+      await mproxy.joinTarget(target);
+      if (st.nextAction === 'members') {
+        userState.set(ctx.from.id, { action: 'members', step: 1, data: { channel: target } });
+        return ctx.reply('Подключение выполнено. Укажите limit и offset через пробел, или отправьте пусто для по умолчанию (50 0).');
+      }
+      if (st.nextAction === 'members_all') {
+        const channel = target;
+        await ctx.reply(`Загружаю всех участников ${channel}...`);
+        const members = await mproxy.fetchAllMembers(channel, { pageSize: 500, hardMax: 100000 });
+        if (!members.length) {
+          await ctx.reply('Участники не найдены.', mainMenuKeyboard());
+        } else {
+          const lines = members.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
+          await sendChunkedHtml(ctx, lines);
+        }
+        return showMainMenu(ctx, 'Готово.');
+      }
+      if (st.nextAction === 'draw') {
+        userState.set(ctx.from.id, { action: 'draw', step: 2, data: { channel: target } });
+        return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+      }
+    }
+
     if (st.action === 'members') {
       // text: <group> [limit] [offset]
       const parts = text.split(/\s+/);
-      const channel = parts[0];
+      const channel = st.data.channel || parts[0];
       const limit = Math.min(Math.max(parseInt(parts[1], 10) || 50, 1), 200);
       const offset = Math.max(parseInt(parts[2], 10) || 0, 0);
       await ctx.reply(`Загружаю участников ${channel} (limit=${limit}, offset=${offset})...`);

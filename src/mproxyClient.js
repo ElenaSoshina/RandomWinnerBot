@@ -48,6 +48,26 @@ export class MProxyClient {
     }
     return members;
   }
+
+  async joinTarget(target) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const url = `${this.baseUrl}/join`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ target }),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`MProxy join error ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
 }
 
 export function buildMProxyFromEnv() {
