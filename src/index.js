@@ -58,9 +58,10 @@ function formatUserLink(user) {
     : `id:${id}`;
   if (user.username) {
     const uname = escapeHtml(user.username);
-    return `<a href="https://t.me/${uname}">@${uname}</a>`;
+    return `<a href="https://t.me/${uname}">@${uname}</a> (id:${id})`;
   }
-  return `<a href="tg://user?id=${id}">${displayName}</a>`;
+  const nameSuffix = hasName ? ` (${displayName})` : '';
+  return `<a href="tg://user?id=${id}">id:${id}</a>${nameSuffix}`;
 }
 
 bot.start(async (ctx) => {
@@ -95,6 +96,22 @@ bot.command('draw', async (ctx) => {
   } catch (err) {
     return ctx.reply(`Ошибка MProxy: ${err.message}`);
   }
+});
+
+bot.command('whois', async (ctx) => {
+  const text = ctx.message.text.trim();
+  const parts = text.split(/\s+/);
+  if (parts.length < 2) {
+    return ctx.reply('Использование: /whois <user_id|@username>');
+  }
+  const arg = parts[1];
+  if (arg.startsWith('@')) {
+    const uname = escapeHtml(arg.slice(1));
+    return ctx.replyWithHTML(`Профиль: <a href="https://t.me/${uname}">@${uname}</a>`, { disable_web_page_preview: true });
+  }
+  const id = String(arg).replace(/[^0-9]/g, '');
+  if (!id) return ctx.reply('Некорректный id');
+  return ctx.replyWithHTML(`Профиль: <a href="tg://user?id=${id}">id:${escapeHtml(id)}</a>`, { disable_web_page_preview: true });
 });
 
 bot.command('members', async (ctx) => {
