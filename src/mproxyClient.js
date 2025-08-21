@@ -1,0 +1,43 @@
+import pino from 'pino';
+
+const logger = pino({ level: process.env.LOG_LEVEL || 'info' });
+
+export class MProxyClient {
+  constructor({ baseUrl, token }) {
+    this.baseUrl = (baseUrl || '').replace(/\/$/, '');
+    this.token = token || '';
+    if (!this.baseUrl) {
+      logger.warn('MProxy base URL is not set; MTProto features are disabled');
+    }
+  }
+
+  isEnabled() {
+    return Boolean(this.baseUrl && this.token);
+  }
+
+  async fetchMembers(channelIdOrUsername, { limit = 1000, offset = 0 } = {}) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const url = `${this.baseUrl}/channels/${encodeURIComponent(channelIdOrUsername)}/members?limit=${limit}&offset=${offset}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`MProxy error ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
+}
+
+export function buildMProxyFromEnv() {
+  const baseUrl = (process.env.MPROXY_BASE_URL || '').trim();
+  const token = (process.env.MPROXY_TOKEN || '').trim();
+  return new MProxyClient({ baseUrl, token });
+}
+
+

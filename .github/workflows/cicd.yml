@@ -77,6 +77,13 @@ jobs:
               --restart unless-stopped \
               -e BOT_TOKEN='${{ secrets.BOT_TOKEN }}' \
               -e LOG_LEVEL='info' \
+              -e ENABLE_MPROXY='${{ secrets.ENABLE_MPROXY }}' \
+              -e TG_API_ID='${{ secrets.TG_API_ID }}' \
+              -e TG_API_HASH='${{ secrets.TG_API_HASH }}' \
+              -e TG_SESSION='${{ secrets.TG_SESSION }}' \
+              -e MPROXY_TOKEN='${{ secrets.MPROXY_TOKEN }}' \
+              -e MPROXY_BASE_URL='http://127.0.0.1:8081' \
+              -e MPROXY_PORT='8081' \
               "$IMAGE"
             docker image prune -f
 

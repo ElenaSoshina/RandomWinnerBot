@@ -3,6 +3,9 @@ import { Telegraf } from 'telegraf';
 import pino from 'pino';
 import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
+import { buildMProxyFromEnv } from './mproxyClient.js';
+import { startMProxyServer } from './mproxy-server.js';
+import { pickUniqueRandom } from './giveaway.js';
 
 dotenv.config();
 
@@ -37,6 +40,7 @@ if (agent) {
 }
 
 const bot = new Telegraf(botToken, telegrafOptions);
+const mproxy = buildMProxyFromEnv();
 
 bot.start(async (ctx) => {
   await ctx.reply('Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.  ');
@@ -44,6 +48,32 @@ bot.start(async (ctx) => {
 
 bot.command('ping', async (ctx) => {
   await ctx.reply('pong');
+});
+
+bot.command('draw', async (ctx) => {
+  if (!mproxy.isEnabled()) {
+    return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  }
+  const text = ctx.message.text.trim();
+  const parts = text.split(/\s+/);
+  if (parts.length < 3) {
+    return ctx.reply('Использование: /draw <@channel|id> <кол-во_победителей>');
+  }
+  const channel = parts[1];
+  const winnersCount = Math.max(1, parseInt(parts[2], 10) || 1);
+  await ctx.reply(`Собираю участников канала ${channel}...`);
+  try {
+    const members = await mproxy.fetchMembers(channel, { limit: 100000 });
+    const humans = members.filter((m) => !m.is_bot);
+    const winners = pickUniqueRandom(humans, winnersCount);
+    if (!winners.length) {
+      return ctx.reply('Не найдено участников для розыгрыша.');
+    }
+    const list = winners.map((u, i) => `${i + 1}. ${u.username ? '@' + u.username : u.user_id}`).join('\n');
+    await ctx.reply(`Победители:\n${list}`);
+  } catch (err) {
+    return ctx.reply(`Ошибка MProxy: ${err.message}`);
+  }
 });
 
 bot.catch((err, ctx) => {
@@ -54,6 +84,11 @@ async function launch() {
   logger.info('Launching bot...');
   await bot.launch();
   logger.info('Bot launched');
+
+  // Опциональный запуск встроенного MProxy, если явно включён
+  if ((process.env.ENABLE_MPROXY || '').toLowerCase() === 'true') {
+    startMProxyServer();
+  }
 
   const signals = ['SIGINT', 'SIGTERM', 'SIGQUIT'];
   for (const signal of signals) {
