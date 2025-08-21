@@ -85,9 +85,15 @@ async function launch() {
   await bot.launch();
   logger.info('Bot launched');
 
-  // Опциональный запуск встроенного MProxy, если явно включён
-  if ((process.env.ENABLE_MPROXY || '').toLowerCase() === 'true') {
+  // Опциональный запуск встроенного MProxy с гибкой интерпретацией флага
+  const rawFlag = (process.env.ENABLE_MPROXY || '').trim().toLowerCase();
+  const normalizedFlag = rawFlag.replace(/^["']|["']$/g, '');
+  const enableMproxy = ['true', '1', 'yes', 'on'].includes(normalizedFlag);
+  if (enableMproxy) {
+    logger.info('ENABLE_MPROXY is true; starting embedded MProxy server');
     startMProxyServer();
+  } else {
+    logger.info({ ENABLE_MPROXY: process.env.ENABLE_MPROXY }, 'Embedded MProxy disabled');
   }
 
   const signals = ['SIGINT', 'SIGTERM', 'SIGQUIT'];
