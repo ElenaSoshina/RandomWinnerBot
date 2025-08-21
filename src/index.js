@@ -168,6 +168,9 @@ function mainMenuKeyboard() {
           { text: '👥 Список участников', callback_data: 'menu_members' },
           { text: '🎁 Розыгрыш', callback_data: 'menu_draw' },
         ],
+        [
+          { text: '📝 Розыгрыш по посту', callback_data: 'menu_draw_post' },
+        ],
       ],
     },
   };
@@ -205,6 +208,15 @@ bot.action('menu_members_all', async (ctx) => {
 bot.action('menu_draw', async (ctx) => {
   await ctx.answerCbQuery();
   // Розыгрыш по конкретному посту (бот публикует пост с кнопкой)
+  userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
+  await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
+// Альтернативный вход в тот же сценарий — отдельной кнопкой
+bot.action('menu_draw_post', async (ctx) => {
+  await ctx.answerCbQuery();
   userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
   await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
