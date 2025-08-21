@@ -45,6 +45,7 @@ const mproxy = buildMProxyFromEnv();
 
 // Простая сессия в памяти для пошаговых сценариев
 const userState = new Map(); // key: from.id, value: { action, step, data }
+const giveaways = new Map(); // id -> { channel, messageId, winnersCount, entries:Set<user_id>, createdBy:number, text:string }
 
 // Временное хранилище данных для кнопок (избегаем длинного callback_data)
 const ephemeralStore = new Map(); // token -> { value, expiresAt }
@@ -203,9 +204,9 @@ bot.action('menu_members_all', async (ctx) => {
 
 bot.action('menu_draw', async (ctx) => {
   await ctx.answerCbQuery();
-  if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'draw', data: {} });
-  await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и затем попрошу число победителей.', {
+  // Розыгрыш по конкретному посту (бот публикует пост с кнопкой)
+  userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
+  await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -261,6 +262,50 @@ bot.on('text', async (ctx, next) => {
       if (st.nextAction === 'draw') {
         userState.set(ctx.from.id, { action: 'draw', step: 2, data: { channel: target } });
         return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+      }
+    }
+
+    // Новый сценарий: розыгрыш по посту
+    if (st.action === 'draw_post') {
+      if (st.step === 1) {
+        st.data.channel = text;
+        st.step = 2;
+        userState.set(ctx.from.id, st);
+        return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+      }
+      if (st.step === 2) {
+        const num = Math.max(1, parseInt(text, 10) || 1);
+        st.data.winnersCount = num;
+        st.step = 3;
+        userState.set(ctx.from.id, st);
+        return ctx.reply('Шаг 3. Отправьте текст поста розыгрыша (он будет опубликован с кнопкой «Участвовать»).');
+      }
+      if (st.step === 3) {
+        const { channel, winnersCount } = st.data;
+        const postText = text;
+        await ctx.reply('Публикую пост в канале...');
+        // Публикуем пост с кнопкой участия
+        const giveawayId = randomBytes(8).toString('hex');
+        const msg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
+          reply_markup: { inline_keyboard: [[{ text: '✅ Участвовать', callback_data: `gwj:${giveawayId}` }]] },
+          disable_web_page_preview: true,
+        }).catch(async (e) => {
+          await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
+          throw e;
+        });
+        giveaways.set(giveawayId, {
+          channel,
+          messageId: msg.message_id,
+          winnersCount,
+          entries: new Set(),
+          createdBy: ctx.from.id,
+          text: postText,
+        });
+        const finishToken = putEphemeral({ giveawayId });
+        await ctx.reply('Пост опубликован. Когда будете готовы — завершите розыгрыш.', {
+          reply_markup: { inline_keyboard: [[{ text: '🎉 Завершить розыгрыш', callback_data: `gwe:${finishToken}` }]] },
+        });
+        return showMainMenu(ctx, 'Готово. Розыгрыш запущен.');
       }
     }
 
@@ -353,6 +398,38 @@ bot.on('text', async (ctx, next) => {
   }
 
   return next();
+});
+
+// Обработка нажатия «Участвовать» на посте
+bot.action(/gwj:.+/, async (ctx) => {
+  const id = ctx.match.input.split(':')[1];
+  const g = giveaways.get(id);
+  if (!g) {
+    return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
+  }
+  g.entries.add(String(ctx.from.id));
+  return ctx.answerCbQuery('Вы участвуете!', { show_alert: false });
+});
+
+// Завершение розыгрыша
+bot.action(/gwe:.+/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const token = ctx.match.input.split(':')[1];
+  const data = getEphemeral(token);
+  if (!data) return ctx.reply('Сессия завершения устарела.');
+  const { giveawayId } = data;
+  const g = giveaways.get(giveawayId);
+  if (!g) return ctx.reply('Розыгрыш уже завершён.');
+  const participants = Array.from(g.entries).map((id) => ({ user_id: id }));
+  const winners = pickUniqueRandom(participants, g.winnersCount);
+  const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
+  await ctx.telegram.sendMessage(g.channel, `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}`, { disable_web_page_preview: true });
+  const ids = winners.map((u) => u.user_id);
+  const msgToken = putEphemeral(ids);
+  await ctx.reply('Розыгрыш завершён.', {
+    reply_markup: { inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${msgToken}` }]] },
+  });
+  giveaways.delete(giveawayId);
 });
 
 async function sendChunkedHtml(ctx, lines) {
