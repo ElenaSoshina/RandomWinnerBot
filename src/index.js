@@ -42,6 +42,9 @@ if (agent) {
 const bot = new Telegraf(botToken, telegrafOptions);
 const mproxy = buildMProxyFromEnv();
 
+// Простая сессия в памяти для пошаговых сценариев
+const userState = new Map(); // key: from.id, value: { action, step, data }
+
 function escapeHtml(text) {
   return String(text)
     .replaceAll('&', '&amp;')
@@ -65,7 +68,7 @@ function formatUserLink(user) {
 }
 
 bot.start(async (ctx) => {
-  await ctx.reply('Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.  ');
+  await showMainMenu(ctx, 'Привет! Я готов к розыгрышам. Добавьте меня в канал как администратора для доступа к участникам.');
 });
 
 bot.command('ping', async (ctx) => {
@@ -113,6 +116,171 @@ bot.command('whois', async (ctx) => {
   if (!id) return ctx.reply('Некорректный id');
   return ctx.replyWithHTML(`Профиль: <a href="tg://user?id=${id}">id:${escapeHtml(id)}</a>`, { disable_web_page_preview: true });
 });
+
+// ---------- Меню и кнопки ----------
+function mainMenuKeyboard() {
+  return {
+    reply_markup: {
+      inline_keyboard: [
+        [
+          { text: 'Список участников', callback_data: 'menu_members' },
+          { text: 'Все участники', callback_data: 'menu_members_all' },
+        ],
+        [
+          { text: 'Розыгрыш', callback_data: 'menu_draw' },
+          { text: 'Whois', callback_data: 'menu_whois' },
+        ],
+      ],
+    },
+  };
+}
+
+async function showMainMenu(ctx, text = 'Главное меню') {
+  userState.delete(ctx.from.id);
+  await ctx.reply(text, mainMenuKeyboard());
+}
+
+bot.action('menu_main', async (ctx) => {
+  await ctx.answerCbQuery();
+  await showMainMenu(ctx);
+});
+
+bot.action('menu_members', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  userState.set(ctx.from.id, { action: 'members', step: 1, data: {} });
+  await ctx.reply('Введите @username группы или -100ID (не канал-трансляция). Опц.: добавьте limit и offset через пробел. Пример: @group 50 0', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
+bot.action('menu_members_all', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  userState.set(ctx.from.id, { action: 'members_all', step: 1, data: {} });
+  await ctx.reply('Введите @username группы или -100ID, загружу всех участников.', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
+bot.action('menu_draw', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
+  userState.set(ctx.from.id, { action: 'draw', step: 1, data: {} });
+  await ctx.reply('Шаг 1/2. Введите @username группы или -100ID, из которой выбирать победителей.', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
+bot.action('menu_whois', async (ctx) => {
+  await ctx.answerCbQuery();
+  userState.set(ctx.from.id, { action: 'whois', step: 1, data: {} });
+  await ctx.reply('Введите @username или числовой user id для ссылки на профиль.', {
+    reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+  });
+});
+
+// Общий обработчик текстов для пошаговых сценариев
+bot.on('text', async (ctx, next) => {
+  const st = userState.get(ctx.from.id);
+  if (!st) return next();
+  const text = ctx.message.text.trim();
+
+  try {
+    if (st.action === 'members') {
+      // text: <group> [limit] [offset]
+      const parts = text.split(/\s+/);
+      const channel = parts[0];
+      const limit = Math.min(Math.max(parseInt(parts[1], 10) || 50, 1), 200);
+      const offset = Math.max(parseInt(parts[2], 10) || 0, 0);
+      await ctx.reply(`Загружаю участников ${channel} (limit=${limit}, offset=${offset})...`);
+      const members = await mproxy.fetchMembers(channel, { limit, offset });
+      if (!members.length) {
+        await ctx.reply('Участники не найдены.', mainMenuKeyboard());
+      } else {
+        const lines = members.map((u, i) => `${offset + i + 1}. ${formatUserLink(u)}`);
+        await sendChunkedHtml(ctx, lines);
+      }
+      return showMainMenu(ctx, 'Готово.');
+    }
+
+    if (st.action === 'members_all') {
+      const channel = text;
+      await ctx.reply(`Загружаю всех участников ${channel}...`);
+      const members = await mproxy.fetchAllMembers(channel, { pageSize: 500, hardMax: 100000 });
+      if (!members.length) {
+        await ctx.reply('Участники не найдены.', mainMenuKeyboard());
+      } else {
+        const lines = members.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
+        await sendChunkedHtml(ctx, lines);
+      }
+      return showMainMenu(ctx, 'Готово.');
+    }
+
+    if (st.action === 'draw') {
+      if (st.step === 1) {
+        st.data.channel = text;
+        st.step = 2;
+        userState.set(ctx.from.id, st);
+        return ctx.reply('Шаг 2/2. Укажите количество победителей (число).', {
+          reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+        });
+      }
+      if (st.step === 2) {
+        const winnersCount = Math.max(1, parseInt(text, 10) || 1);
+        const channel = st.data.channel;
+        await ctx.reply(`Собираю участников канала ${channel}...`);
+        const members = await mproxy.fetchMembers(channel, { limit: 100000 });
+        const humans = members.filter((m) => !m.is_bot);
+        const winners = pickUniqueRandom(humans, winnersCount);
+        if (!winners.length) {
+          await ctx.reply('Не найдено участников для розыгрыша.', mainMenuKeyboard());
+        } else {
+          const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
+          await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, { disable_web_page_preview: true });
+        }
+        return showMainMenu(ctx, 'Готово.');
+      }
+    }
+
+    if (st.action === 'whois') {
+      if (text.startsWith('@')) {
+        const uname = escapeHtml(text.slice(1));
+        await ctx.replyWithHTML(`Профиль: <a href="https://t.me/${uname}">@${uname}</a>`, { disable_web_page_preview: true });
+      } else {
+        const id = String(text).replace(/[^0-9]/g, '');
+        if (!id) return ctx.reply('Некорректный ввод. Нужен @username или числовой id.');
+        await ctx.replyWithHTML(`Профиль: <a href="tg://user?id=${id}">id:${escapeHtml(id)}</a>`, { disable_web_page_preview: true });
+      }
+      return showMainMenu(ctx, 'Готово.');
+    }
+  } catch (err) {
+    await ctx.reply(`Ошибка: ${err.message}`, mainMenuKeyboard());
+    return showMainMenu(ctx);
+  }
+
+  return next();
+});
+
+async function sendChunkedHtml(ctx, lines) {
+  const chunks = [];
+  let current = [];
+  let len = 0;
+  for (const line of lines) {
+    if (len + line.length + 1 > 3500) {
+      chunks.push(current.join('\n'));
+      current = [];
+      len = 0;
+    }
+    current.push(line);
+    len += line.length + 1;
+  }
+  if (current.length) chunks.push(current.join('\n'));
+  for (const chunk of chunks) {
+    // eslint-disable-next-line no-await-in-loop
+    await ctx.replyWithHTML(chunk, { disable_web_page_preview: true });
+  }
+}
 
 bot.command('members', async (ctx) => {
   if (!mproxy.isEnabled()) {
