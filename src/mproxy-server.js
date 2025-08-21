@@ -28,20 +28,21 @@ app.use((req, res, next) => {
 // Создание TelegramClient (GramJS)
 const apiId = parseInt(requireEnv('TG_API_ID'), 10);
 const apiHash = requireEnv('TG_API_HASH');
-const stringSession = new StringSession(process.env.TG_SESSION || '');
+const providedSession = (process.env.TG_SESSION || '').trim();
+const stringSession = new StringSession(providedSession);
 
 let client;
 
 async function ensureClient() {
   if (client) return client;
   client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
-  await client.start({
-    phoneNumber: async () => { throw new Error('Interactive login not supported in server mode'); },
-    password: async () => '',
-    phoneCode: async () => '',
-    onError: (err) => logger.error({ err }, 'GramJS error'),
-  });
-  logger.info('MProxy Telegram client started');
+  // Если сессия уже предоставлена, достаточно establish connection
+  await client.connect();
+  const authorized = await client.isUserAuthorized();
+  if (!authorized) {
+    throw new Error('TG_SESSION is invalid or expired. Please regenerate the session string.');
+  }
+  logger.info('MProxy Telegram client connected with existing session');
   return client;
 }
 
