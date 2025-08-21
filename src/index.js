@@ -6,6 +6,7 @@ import { SocksProxyAgent } from 'socks-proxy-agent';
 import { buildMProxyFromEnv } from './mproxyClient.js';
 import { startMProxyServer } from './mproxy-server.js';
 import { pickUniqueRandom } from './giveaway.js';
+import { randomBytes } from 'crypto';
 
 dotenv.config();
 
@@ -44,6 +45,25 @@ const mproxy = buildMProxyFromEnv();
 
 // Простая сессия в памяти для пошаговых сценариев
 const userState = new Map(); // key: from.id, value: { action, step, data }
+
+// Временное хранилище данных для кнопок (избегаем длинного callback_data)
+const ephemeralStore = new Map(); // token -> { value, expiresAt }
+function putEphemeral(value, ttlMs = 10 * 60 * 1000) {
+  const token = randomBytes(8).toString('hex');
+  const expiresAt = Date.now() + ttlMs;
+  ephemeralStore.set(token, { value, expiresAt });
+  setTimeout(() => ephemeralStore.delete(token), ttlMs).unref?.();
+  return token;
+}
+function getEphemeral(token) {
+  const entry = ephemeralStore.get(token);
+  if (!entry) return undefined;
+  if (entry.expiresAt < Date.now()) {
+    ephemeralStore.delete(token);
+    return undefined;
+  }
+  return entry.value;
+}
 
 function escapeHtml(text) {
   return String(text)
@@ -111,9 +131,8 @@ bot.command('draw', async (ctx) => {
 bot.action(/msg_winners:.+/, async (ctx) => {
   await ctx.answerCbQuery();
   if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
-  const data = ctx.match.input.split(':')[1];
-  let ids = [];
-  try { ids = JSON.parse(decodeURIComponent(data)); } catch (e) { ids = []; }
+  const token = ctx.match.input.split(':')[1];
+  const ids = getEphemeral(token) || [];
   if (!Array.isArray(ids) || ids.length === 0) {
     return ctx.reply('Список победителей пуст.');
   }
@@ -296,10 +315,11 @@ bot.on('text', async (ctx, next) => {
         } else {
           const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
           const winnersIds = winners.map((u) => u.user_id);
+          const token = putEphemeral(winnersIds);
           await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, {
             disable_web_page_preview: true,
             reply_markup: {
-              inline_keyboard: [[{ text: 'Написать победителям', callback_data: `msg_winners:${encodeURIComponent(JSON.stringify(winnersIds))}` }]],
+              inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${token}` }]],
             },
           });
         }
