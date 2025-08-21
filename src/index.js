@@ -42,6 +42,7 @@ if (agent) {
 
 const bot = new Telegraf(botToken, telegrafOptions);
 const mproxy = buildMProxyFromEnv();
+const ENABLE_POST_GIVEAWAY = (process.env.ENABLE_POST_GIVEAWAY || '').trim().toLowerCase() === 'true';
 
 // Простая сессия в памяти для пошаговых сценариев
 const userState = new Map(); // key: from.id, value: { action, step, data }
@@ -168,9 +169,6 @@ function mainMenuKeyboard() {
           { text: '👥 Список участников', callback_data: 'menu_members' },
           { text: '🎁 Розыгрыш', callback_data: 'menu_draw' },
         ],
-        [
-          { text: '📝 Розыгрыш по посту', callback_data: 'menu_draw_post' },
-        ],
       ],
     },
   };
@@ -207,9 +205,9 @@ bot.action('menu_members_all', async (ctx) => {
 
 bot.action('menu_draw', async (ctx) => {
   await ctx.answerCbQuery();
-  // Розыгрыш по конкретному посту (бот публикует пост с кнопкой)
-  userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
-  await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
+  // Обычный розыгрыш среди участников группы
+  userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'draw', data: {} });
+  await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и затем попрошу число победителей.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
   });
 });
@@ -217,6 +215,9 @@ bot.action('menu_draw', async (ctx) => {
 // Альтернативный вход в тот же сценарий — отдельной кнопкой
 bot.action('menu_draw_post', async (ctx) => {
   await ctx.answerCbQuery();
+  if (!ENABLE_POST_GIVEAWAY) {
+    return ctx.reply('Розыгрыш по посту временно отключён.');
+  }
   userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
   await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
     reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
@@ -254,7 +255,7 @@ bot.on('text', async (ctx, next) => {
         await ctx.reply(`Клиент ${clientMe?.username ? '@' + clientMe.username : clientMe?.first_name || 'аккаунт'} не в группе — добавляю...`);
         await mproxy.joinTarget(target);
       }
-      await ctx.reply(`Статус: бот=${botStatus}; клиент=${clientMember.is_member ? 'в группе' : 'добавлен'}`);
+      // Статусы пользователю не показываем, действуем тихо
       if (st.nextAction === 'members') {
         userState.set(ctx.from.id, { action: 'members', step: 1, data: { channel: target } });
         return ctx.reply('Подключение выполнено. Загружаю участников...');
@@ -369,18 +370,18 @@ bot.on('text', async (ctx, next) => {
         const winners = pickUniqueRandom(humans, winnersCount);
         if (!winners.length) {
           await ctx.reply('Не найдено участников для розыгрыша.', mainMenuKeyboard());
-        } else {
-          const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
-          const winnersIds = winners.map((u) => u.user_id);
-          const token = putEphemeral(winnersIds);
-          await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, {
-            disable_web_page_preview: true,
-            reply_markup: {
-              inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${token}` }]],
-            },
-          });
+          return;
         }
-        return showMainMenu(ctx, 'Готово.');
+        const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
+        const winnersIds = winners.map((u) => u.user_id);
+        const token = putEphemeral(winnersIds);
+        await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, {
+          disable_web_page_preview: true,
+          reply_markup: {
+            inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${token}` }]],
+          },
+        });
+        return;
       }
     }
 
