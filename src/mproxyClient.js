@@ -119,6 +119,44 @@ export class MProxyClient {
     if (!res.ok) throw new Error(`MProxy isMember error ${res.status}`);
     return res.json();
   }
+
+  async postMessage(channelIdOrUsername, { text, buttonText, url }) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const res = await fetch(`${this.baseUrl}/channels/${encodeURIComponent(channelIdOrUsername)}/post`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ text, button_text: buttonText, url }),
+    });
+    if (!res.ok) {
+      const textRes = await res.text().catch(() => '');
+      throw new Error(`MProxy post error ${res.status}: ${textRes}`);
+    }
+    return res.json();
+  }
+
+  async editButton(channelIdOrUsername, { messageId, buttonText, url }) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const res = await fetch(`${this.baseUrl}/channels/${encodeURIComponent(channelIdOrUsername)}/editButton`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message_id: messageId, button_text: buttonText, url }),
+    });
+    if (!res.ok) {
+      const textRes = await res.text().catch(() => '');
+      throw new Error(`MProxy editButton error ${res.status}: ${textRes}`);
+    }
+    return res.json();
+  }
 }
 
 export function buildMProxyFromEnv() {

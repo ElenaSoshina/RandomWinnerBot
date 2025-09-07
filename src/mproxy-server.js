@@ -185,6 +185,60 @@ app.post('/sendMessages', async (req, res) => {
   }
 });
 
+// Публикация поста в канал/группу от имени клиент-аккаунта с URL-кнопкой
+app.post('/channels/:idOrUsername/post', async (req, res) => {
+  try {
+    const { idOrUsername } = req.params;
+    const { text, button_text: buttonText, url } = req.body || {};
+    if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'text is required' });
+    if (typeof buttonText !== 'string' || !buttonText.trim()) return res.status(400).json({ error: 'button_text is required' });
+    if (typeof url !== 'string' || !url.trim()) return res.status(400).json({ error: 'url is required' });
+    const c = await ensureClient();
+    const entity = await c.getEntity(idOrUsername);
+    const replyMarkup = new Api.ReplyInlineMarkup({
+      rows: [
+        new Api.KeyboardButtonRow({
+          buttons: [new Api.KeyboardButtonUrl({ text: buttonText, url })],
+        }),
+      ],
+    });
+    const result = await c.sendMessage(entity, { message: text, replyMarkup });
+    const messageId = result?.id ?? result?.updates?.[0]?.id ?? null;
+    return res.json({ ok: true, message_id: messageId });
+  } catch (err) {
+    logger.error({ err }, 'post error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Обновление текста URL-кнопки у опубликованного клиентом сообщения
+app.post('/channels/:idOrUsername/editButton', async (req, res) => {
+  try {
+    const { idOrUsername } = req.params;
+    const { message_id: messageId, button_text: buttonText, url } = req.body || {};
+    if (!messageId) return res.status(400).json({ error: 'message_id is required' });
+    if (typeof buttonText !== 'string' || !buttonText.trim()) return res.status(400).json({ error: 'button_text is required' });
+    if (typeof url !== 'string' || !url.trim()) return res.status(400).json({ error: 'url is required' });
+    const c = await ensureClient();
+    const entity = await c.getEntity(idOrUsername);
+    const replyMarkup = new Api.ReplyInlineMarkup({
+      rows: [
+        new Api.KeyboardButtonRow({
+          buttons: [new Api.KeyboardButtonUrl({ text: buttonText, url })],
+        }),
+      ],
+    });
+    await c.editMessage(entity, { message: Number(messageId), replyMarkup }).catch(async () => {
+      // Try BigInt id
+      return c.editMessage(entity, { message: BigInt(String(messageId)), replyMarkup });
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, 'editButton error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export function startMProxyServer() {
   app.listen(PORT, () => logger.info({ PORT }, 'MProxy listening'));
 }

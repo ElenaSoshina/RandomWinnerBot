@@ -25,6 +25,19 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   }
 
   bot.start(async (ctx) => {
+    // deep-link регистрация участия в розыгрыше по start=<giveawayId>
+    const payload = (ctx.startPayload || '').trim();
+    if (payload && giveaways.has(payload)) {
+      const g = giveaways.get(payload);
+      g.entries.add(String(ctx.from.id));
+      const count = g.entries.size;
+      try {
+        const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${payload}`;
+        await mproxy.editButton(g.channel, { messageId: g.messageId, buttonText: `✅ Участвовать (${count})`, url: deepLink });
+      } catch (e) {}
+      await ctx.reply('Вы участвуете в розыгрыше!');
+      return;
+    }
     await showMainMenu(
       ctx,
       '👋 <b>Привет!</b> Я помогу собрать участников и провести розыгрыш.\n\n' +
@@ -201,28 +214,44 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           st.data.postText = text;
           st.step = 4;
           userState.set(ctx.from.id, st);
-          return ctx.reply('Шаг 4. Укажите время проведения розыгрыша в формате YYYY-MM-DD HH:mm (UTC) или отправьте now для немедленного завершения.');
+          return ctx.reply('Шаг 4. Укажите дату проведения (МСК), например: 16 сентября.');
         }
         if (st.step === 4) {
-          const whenStr = text.trim();
-          const ts = parseScheduleToTs(whenStr);
-          if (!ts) {
-            return ctx.reply('Не удалось распознать время. Пример: 2025-01-31 21:00 или now.');
+          const dateStr = text.trim();
+          const parsedDate = parseRusDateToISO(dateStr);
+          if (!parsedDate) {
+            return ctx.reply('Некорректная дата. Примеры: 16 сентября, 05 марта');
+          }
+          st.data.date = parsedDate; // YYYY-MM-DD
+          st.step = 5;
+          userState.set(ctx.from.id, st);
+          return ctx.reply('Шаг 5. Укажите время (МСК) в формате HH:mm или отправьте now для немедленного завершения.');
+        }
+        if (st.step === 5) {
+          const timeStrRaw = text.trim();
+          let ts;
+          if (/^(now|сейчас)$/i.test(timeStrRaw)) {
+            ts = Date.now();
+          } else {
+            const tsParsed = parseMskDateTime(st.data.date, timeStrRaw);
+            if (!tsParsed) {
+              return ctx.reply('Некорректное время. Пример: 18:30 или now.');
+            }
+            ts = tsParsed;
           }
           const { channel, winnersCount, postText } = st.data;
-          await ctx.reply('Публикую пост в канале...');
+          await ctx.reply('Публикую пост в канале через клиент...');
           const giveawayId = Math.random().toString(16).slice(2, 18);
           const joinBtnText = '✅ Участвовать (0)';
-          const msg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
-            reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
-            disable_web_page_preview: true,
-          }).catch(async (e) => {
+          // Кнопка будет вести в чат с ботом, где бот зарегистрирует участие
+          const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${giveawayId}`;
+          const postRes = await mproxy.postMessage(channel, { text: `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, buttonText: joinBtnText, url: deepLink }).catch(async (e) => {
             await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
             throw e;
           });
           giveaways.set(giveawayId, {
             channel,
-            messageId: msg.message_id,
+            messageId: postRes.message_id,
             winnersCount,
             entries: new Set(),
             createdBy: ctx.from.id,
@@ -337,9 +366,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     g.entries.add(String(ctx.from.id));
     const count = g.entries.size;
     try {
-      await ctx.telegram.editMessageReplyMarkup(g.channel, g.messageId, undefined, {
-        inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${id}` }]],
-      });
+      const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${id}`;
+      await mproxy.editButton(g.channel, { messageId: g.messageId, buttonText: `✅ Участвовать (${count})`, url: deepLink });
     } catch (e) {}
     return ctx.answerCbQuery('Вы участвуете!', { show_alert: false });
   });
@@ -362,16 +390,28 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
 }
 
 function parseScheduleToTs(str) {
-  const s = String(str || '').trim().toLowerCase();
+  const sRaw = String(str || '').trim();
+  const s = sRaw.toLowerCase();
   if (s === 'now' || s === 'сейчас') return Date.now();
-  // Accept formats: YYYY-MM-DD HH:mm or YYYY-MM-DDTHH:mm or full ISO
-  let parsed = Date.parse(s.includes(' ') && !s.includes('t') ? s.replace(' ', 'T') + (s.length === 16 ? ':00Z' : '') : s);
-  if (!Number.isFinite(parsed)) {
-    // try append Z if missing seconds
-    parsed = Date.parse(s + 'Z');
+
+  // If user provided explicit timezone like Z or +03:00, trust Date.parse
+  if (/[zZ]|[+\-]\d{2}:?\d{2}$/.test(sRaw)) {
+    const t = Date.parse(sRaw.replace(' ', 'T'));
+    return Number.isFinite(t) ? t : 0;
   }
-  if (!Number.isFinite(parsed)) return 0;
-  return parsed;
+
+  // Treat bare datetime as Moscow time (UTC+3)
+  const m = sRaw.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return 0;
+  const year = parseInt(m[1], 10);
+  const month = parseInt(m[2], 10) - 1; // 0-based
+  const day = parseInt(m[3], 10);
+  const hour = parseInt(m[4], 10);
+  const minute = parseInt(m[5], 10);
+  const second = m[6] ? parseInt(m[6], 10) : 0;
+  // Moscow is UTC+3 → convert to UTC by subtracting 3 hours
+  const ts = Date.UTC(year, month, day, hour - 3, minute, second, 0);
+  return ts;
 }
 
 async function finishGiveawayById({ botCtx, giveawayId }) {
@@ -409,6 +449,50 @@ function scheduleAutoFinish({ ctx, giveawayId, at }) {
     } catch (e) {}
   }, delay);
   timer.unref?.();
+}
+
+function parseMskDateTime(dateStr, timeStr) {
+  const d = String(dateStr || '').trim();
+  const t = String(timeStr || '').trim();
+  const mDate = d.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const mTime = t.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!mDate || !mTime) return 0;
+  const year = parseInt(mDate[1], 10);
+  const month = parseInt(mDate[2], 10) - 1;
+  const day = parseInt(mDate[3], 10);
+  const hour = parseInt(mTime[1], 10);
+  const minute = parseInt(mTime[2], 10);
+  const second = mTime[3] ? parseInt(mTime[3], 10) : 0;
+  // Treat as MSK (UTC+3)
+  const ts = Date.UTC(year, month, day, hour - 3, minute, second, 0);
+  return ts;
+}
+
+function parseRusDateToISO(input) {
+  const months = {
+    'января': 0,
+    'февраля': 1,
+    'марта': 2,
+    'апреля': 3,
+    'мая': 4,
+    'июня': 5,
+    'июля': 6,
+    'августа': 7,
+    'сентября': 8,
+    'октября': 9,
+    'ноября': 10,
+    'декабря': 11,
+  };
+  const m = String(input || '').trim().toLowerCase().match(/^(\d{1,2})\s+([а-яё]+)$/i);
+  if (!m) return '';
+  const day = parseInt(m[1], 10);
+  const month = months[m[2]];
+  if (month === undefined) return '';
+  const now = new Date();
+  const year = now.getUTCFullYear();
+  const mm = String(month + 1).padStart(2, '0');
+  const dd = String(day).padStart(2, '0');
+  return `${year}-${mm}-${dd}`;
 }
 
 
