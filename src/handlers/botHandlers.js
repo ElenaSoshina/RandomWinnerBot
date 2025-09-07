@@ -4,6 +4,7 @@ import { escapeHtml, formatUserLink, sendChunkedHtml, buildExcludedUsernamesFrom
 
 export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway }) {
   const EXCLUDED_USERNAMES = buildExcludedUsernamesFromEnv(process.env.EXCLUDE_USERNAMES);
+  const DEFAULT_GROUP = process.env.DEFAULT_GROUP || '@MS_Geldbaum';
 
   function mainMenuKeyboard() {
     return {
@@ -25,6 +26,44 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   async function showMainMenu(ctx, text = 'Главное меню') {
     userState.delete(ctx.from.id);
     await ctx.replyWithHTML(text, mainMenuKeyboard());
+  }
+
+  async function handleAskTarget(ctx, st, target) {
+    await ctx.reply('Проверяю права и подключение...');
+    const botMe = await ctx.telegram.getMe();
+    const clientMe = await mproxy.me().catch(() => null);
+    let botStatus = 'не в канале';
+    try {
+      const chat = await ctx.telegram.getChat(target);
+      const member = await ctx.telegram.getChatMember(chat.id, botMe.id);
+      botStatus = member.status;
+    } catch (e) {}
+    const clientMember = await mproxy.isMember(target).catch(() => ({ is_member: false }));
+    if (!clientMember.is_member) {
+      await ctx.reply(`Клиент ${clientMe?.username ? '@' + clientMe.username : clientMe?.first_name || 'аккаунт'} не в группе — добавляю...`);
+      await mproxy.joinTarget(target);
+    }
+    if (st.nextAction === 'members') {
+      userState.set(ctx.from.id, { action: 'members', step: 1, data: { channel: target } });
+      return ctx.reply('Подключение выполнено. Загружаю участников...');
+    }
+    if (st.nextAction === 'members_all') {
+      const channel = target;
+      await ctx.reply(`Загружаю всех участников ${channel}...`);
+      const members = await mproxy.fetchAllMembers(channel, { pageSize: 500, hardMax: 100000 });
+      if (!members.length) {
+        await ctx.reply('Участники не найдены.', mainMenuKeyboard());
+      } else {
+        const lines = members.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
+        await sendChunkedHtml(ctx, lines);
+      }
+      return showMainMenu(ctx, 'Готово.');
+    }
+    if (st.nextAction === 'draw') {
+      userState.set(ctx.from.id, { action: 'draw', step: 2, data: { channel: target } });
+      return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+    }
+    return undefined;
   }
 
   bot.start(async (ctx) => {
@@ -129,7 +168,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
     userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members_all', data: {} });
     await ctx.reply('Шаг 1. Введите username группы. Я добавлю нашего клиента и загружу всех участников.', {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      reply_markup: { inline_keyboard: [
+        [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
+        [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
+      ] },
     });
   });
 
@@ -138,7 +180,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
     userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'members_all', data: {} });
     await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и загружу всех участников.', {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      reply_markup: { inline_keyboard: [
+        [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
+        [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
+      ] },
     });
   });
 
@@ -146,7 +191,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     await ctx.answerCbQuery();
     userState.set(ctx.from.id, { action: 'ask_target', nextAction: 'draw', data: {} });
     await ctx.reply('Шаг 1. Введите username группы. Подключу клиента и затем попрошу число победителей.', {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      reply_markup: { inline_keyboard: [
+        [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
+        [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
+      ] },
     });
   });
 
@@ -165,7 +213,14 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     await ctx.answerCbQuery();
     userState.set(ctx.from.id, { action: 'history', step: 1, data: {} });
     await ctx.reply('Введите username группы для просмотра истории (например, @group).', {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '@MS_Geldbaum', callback_data: 'history_default' },
+            { text: '⬅️ В меню', callback_data: 'menu_main' },
+          ],
+        ],
+      },
     });
   });
 
@@ -181,6 +236,44 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     return bot.handleUpdate(ctx.update);
   });
 
+  bot.action('history_default', async (ctx) => {
+    await ctx.answerCbQuery();
+    const channel = '@MS_Geldbaum';
+    const st = { action: 'history', step: 1, data: { channel, offset: 0 } };
+    userState.set(ctx.from.id, st);
+    const pageSize = 5;
+    const total = historyCount(channel);
+    const items = readHistory({ channel, limit: pageSize, offset: 0 });
+    if (!items.length) {
+      await ctx.reply('История пуста для указанной группы.', mainMenuKeyboard());
+      return showMainMenu(ctx, 'Готово.');
+    }
+    const startIndex = Math.max(0, total - items.length) + 1;
+    const lines = items.map((r, i) => {
+      const when = new Date(r.ts || r.time || Date.now()).toLocaleString('ru-RU');
+      const winnersFmt = (r.winners || []).map((u, idx) => `${idx + 1}. ${formatUserLink(u)}`).join('\n');
+      return `#${startIndex + i} — ${when}\nТекст: ${escapeHtml(r.text || '')}\nПобедители:\n${winnersFmt}`;
+    });
+    await sendChunkedHtml(ctx, lines);
+    const hasMore = pageSize < total;
+    if (hasMore) {
+      st.data.offset = pageSize;
+      userState.set(ctx.from.id, st);
+      await ctx.reply('Показать ещё?', {
+        reply_markup: { inline_keyboard: [[{ text: '⬇️ Ещё', callback_data: 'history_more' }, { text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      });
+      return;
+    }
+    return showMainMenu(ctx, 'Готово.');
+  });
+
+  bot.action('target_default', async (ctx) => {
+    await ctx.answerCbQuery();
+    const st = userState.get(ctx.from.id);
+    if (!st || st.action !== 'ask_target') return;
+    return handleAskTarget(ctx, st, DEFAULT_GROUP);
+  });
+
   bot.on('text', async (ctx, next) => {
     const st = userState.get(ctx.from.id);
     if (!st) return next();
@@ -189,40 +282,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     try {
       if (st.action === 'ask_target') {
         const target = text;
-        await ctx.reply('Проверяю права и подключение...');
-        const botMe = await ctx.telegram.getMe();
-        const clientMe = await mproxy.me().catch(() => null);
-        let botStatus = 'не в канале';
-        try {
-          const chat = await ctx.telegram.getChat(target);
-          const member = await ctx.telegram.getChatMember(chat.id, botMe.id);
-          botStatus = member.status;
-        } catch (e) {}
-        const clientMember = await mproxy.isMember(target).catch(() => ({ is_member: false }));
-        if (!clientMember.is_member) {
-          await ctx.reply(`Клиент ${clientMe?.username ? '@' + clientMe.username : clientMe?.first_name || 'аккаунт'} не в группе — добавляю...`);
-          await mproxy.joinTarget(target);
-        }
-        if (st.nextAction === 'members') {
-          userState.set(ctx.from.id, { action: 'members', step: 1, data: { channel: target } });
-          return ctx.reply('Подключение выполнено. Загружаю участников...');
-        }
-        if (st.nextAction === 'members_all') {
-          const channel = target;
-          await ctx.reply(`Загружаю всех участников ${channel}...`);
-          const members = await mproxy.fetchAllMembers(channel, { pageSize: 500, hardMax: 100000 });
-          if (!members.length) {
-            await ctx.reply('Участники не найдены.', mainMenuKeyboard());
-          } else {
-            const lines = members.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
-            await sendChunkedHtml(ctx, lines);
-          }
-          return showMainMenu(ctx, 'Готово.');
-        }
-        if (st.nextAction === 'draw') {
-          userState.set(ctx.from.id, { action: 'draw', step: 2, data: { channel: target } });
-          return ctx.reply('Шаг 2. Укажите количество победителей (число).');
-        }
+        const res = await handleAskTarget(ctx, st, target);
+        if (res !== undefined) return res;
       }
 
       if (st.action === 'draw_post') {
