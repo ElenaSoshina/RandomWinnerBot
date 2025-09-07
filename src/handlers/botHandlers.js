@@ -245,7 +245,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           const joinBtnText = '✅ Участвовать (0)';
           // Кнопка будет вести в чат с ботом, где бот зарегистрирует участие
           const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${giveawayId}`;
-          const postRes = await mproxy.postMessage(channel, { text: `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, buttonText: joinBtnText, url: deepLink }).catch(async (e) => {
+          const postBody = `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:\n${deepLink}`;
+          const postRes = await mproxy.postMessage(channel, { text: postBody, buttonText: joinBtnText, url: deepLink }).catch(async (e) => {
             await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
             throw e;
           });
@@ -258,7 +259,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             });
             botButtonMessageId = botMsg.message_id;
           } catch (e) {
-            // бот не в группе — оставляем только URL‑кнопку клиента
+            await ctx.reply('Внимание: бот не состоит в группе, поэтому интерактивная кнопка не добавлена. Ссылка для участия есть в тексте поста. Добавьте бота в группу, чтобы показывать кнопку и счётчик.');
           }
 
           giveaways.set(giveawayId, {
