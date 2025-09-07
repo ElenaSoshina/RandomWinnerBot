@@ -205,7 +205,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     }
     userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
     await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
-      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+      reply_markup: { inline_keyboard: [
+        [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
+        [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
+      ] },
     });
   });
 
