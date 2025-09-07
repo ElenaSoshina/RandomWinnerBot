@@ -240,6 +240,25 @@ app.post('/channels/:idOrUsername/editButton', async (req, res) => {
   }
 });
 
+// Обновление текста сообщения клиента
+app.post('/channels/:idOrUsername/editText', async (req, res) => {
+  try {
+    const { idOrUsername } = req.params;
+    const { message_id: messageId, text } = req.body || {};
+    if (!messageId) return res.status(400).json({ error: 'message_id is required' });
+    if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'text is required' });
+    const c = await ensureClient();
+    const entity = await c.getEntity(idOrUsername);
+    await c.editMessage(entity, { message: Number(messageId), text }).catch(async () => {
+      return c.editMessage(entity, { message: BigInt(String(messageId)), text });
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    logger.error({ err }, 'editText error');
+    res.status(500).json({ error: err.message });
+  }
+});
+
 export function startMProxyServer() {
   app.listen(PORT, () => logger.info({ PORT }, 'MProxy listening'));
 }

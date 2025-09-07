@@ -157,6 +157,25 @@ export class MProxyClient {
     }
     return res.json();
   }
+
+  async editText(channelIdOrUsername, { messageId, text }) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const res = await fetch(`${this.baseUrl}/channels/${encodeURIComponent(channelIdOrUsername)}/editText`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ message_id: messageId, text }),
+    });
+    if (!res.ok) {
+      const textRes = await res.text().catch(() => '');
+      throw new Error(`MProxy editText error ${res.status}: ${textRes}`);
+    }
+    return res.json();
+  }
 }
 
 export function buildMProxyFromEnv() {

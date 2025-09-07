@@ -240,32 +240,24 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             ts = tsParsed;
           }
           const { channel, winnersCount, postText } = st.data;
-          await ctx.reply('Публикую пост в канале через клиент...');
+          await ctx.reply('Публикую пост в канале от имени бота...');
           const giveawayId = Math.random().toString(16).slice(2, 18);
           const joinBtnText = '✅ Участвовать (0)';
-          // Кнопка будет вести в чат с ботом, где бот зарегистрирует участие
-          const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${giveawayId}`;
-          const postBody = `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:\n${deepLink}`;
-          const postRes = await mproxy.postMessage(channel, { text: postBody, buttonText: joinBtnText, url: deepLink }).catch(async (e) => {
-            await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
-            throw e;
-          });
-          // Пытаемся опубликовать интерактивную кнопку от имени бота (если бот состоит в группе)
           let botButtonMessageId = null;
           try {
-            const botMsg = await ctx.telegram.sendMessage(channel, 'Нажмите кнопку ниже, чтобы участвовать:', {
-              reply_to_message_id: postRes.message_id,
+            const botMsg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
               reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
               disable_web_page_preview: true,
             });
             botButtonMessageId = botMsg.message_id;
           } catch (e) {
-            await ctx.reply('Внимание: бот не состоит в группе, поэтому интерактивная кнопка не добавлена. Ссылка для участия есть в тексте поста. Добавьте бота в группу, чтобы показывать кнопку и счётчик.');
+            await ctx.reply('Не удалось опубликовать пост от имени бота. Добавьте бота в группу и дайте право писать сообщения.');
+            throw e;
           }
 
           giveaways.set(giveawayId, {
             channel,
-            messageId: postRes.message_id,
+            messageId: undefined,
             botMessageId: botButtonMessageId,
             winnersCount,
             entries: new Set(),
@@ -378,11 +370,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     if (!g) {
       return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
     }
+    // ensure unique participation
     g.entries.add(String(ctx.from.id));
     const count = g.entries.size;
     try {
-      const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${id}`;
-      await mproxy.editButton(g.channel, { messageId: g.messageId, buttonText: `✅ Участвовать (${count})`, url: deepLink });
       if (g.botMessageId) {
         await ctx.telegram.editMessageReplyMarkup(g.channel, g.botMessageId, undefined, {
           inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${id}` }]],
@@ -444,12 +435,15 @@ async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
   const winners = pickUniqueRandom(participants, g.winnersCount);
   const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
   try {
-    // Публикуем итоги через клиента, чтобы избежать 403 для бота
-    await mproxy.postMessage(g.channel, { text: `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}` });
-    // Disable join button
-    await botCtx.telegram.editMessageReplyMarkup(g.channel, g.messageId, undefined, {
-      inline_keyboard: [[{ text: `⏹ Участие закрыто (${g.entries.size})`, callback_data: 'noop' }]],
-    }).catch(() => {});
+    await botCtx.telegram.sendMessage(g.channel, `Итоги розыгрыша:\n${list}`, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true,
+    });
+    if (g.botMessageId) {
+      await botCtx.telegram.editMessageReplyMarkup(g.channel, g.botMessageId, undefined, {
+        inline_keyboard: [[{ text: `⏹ Участие закрыто (${g.entries.size})`, callback_data: 'noop' }]],
+      }).catch(() => {});
+    }
   } catch (e) {
     await botCtx.reply(`Ошибка публикации итогов: ${e.message}`);
   }
