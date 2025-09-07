@@ -29,7 +29,13 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     const payload = (ctx.startPayload || '').trim();
     if (payload && giveaways.has(payload)) {
       const g = giveaways.get(payload);
-      g.entries.add(String(ctx.from.id));
+      const uid = String(ctx.from.id);
+      g.entries.set(uid, {
+        user_id: uid,
+        username: ctx.from.username || null,
+        first_name: ctx.from.first_name || null,
+        last_name: ctx.from.last_name || null,
+      });
       const count = g.entries.size;
       try {
         const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${payload}`;
@@ -260,7 +266,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             messageId: undefined,
             botMessageId: botButtonMessageId,
             winnersCount,
-            entries: new Set(),
+            entries: new Map(),
             createdBy: ctx.from.id,
             text: postText,
             scheduledAt: ts,
@@ -370,7 +376,15 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
     }
     // ensure unique participation
-    g.entries.add(String(ctx.from.id));
+    {
+      const uid = String(ctx.from.id);
+      g.entries.set(uid, {
+        user_id: uid,
+        username: ctx.from.username || null,
+        first_name: ctx.from.first_name || null,
+        last_name: ctx.from.last_name || null,
+      });
+    }
     const count = g.entries.size;
     try {
       if (g.botMessageId) {
@@ -430,7 +444,7 @@ async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
     await botCtx.reply('Розыгрыш уже завершён.');
     return false;
   }
-  const participants = Array.from(g.entries).map((id) => ({ user_id: id }));
+  const participants = Array.from(g.entries.values());
   const winners = pickUniqueRandom(participants, g.winnersCount);
   const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
   try {
@@ -446,8 +460,7 @@ async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
   } catch (e) {
     await botCtx.reply(`Ошибка публикации итогов: ${e.message}`);
   }
-  const ids = winners.map((u) => u.user_id);
-  const msgToken = putEphemeral(ids);
+  const msgToken = putEphemeral(winners);
   await botCtx.reply('Розыгрыш завершён.', {
     reply_markup: { inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${msgToken}` }]] },
   });
