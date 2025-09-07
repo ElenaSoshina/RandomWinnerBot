@@ -88,6 +88,35 @@ function formatUserLink(user) {
   return `<a href="tg://user?id=${id}">id:${id}</a>${nameSuffix}`;
 }
 
+function normalizeUsername(u) {
+  return String(u || '').replace(/^@/, '').toLowerCase();
+}
+
+const EXCLUDED_USERNAMES = new Set(
+  String(process.env.EXCLUDE_USERNAMES || 'unknownUniverseHere')
+    .split(',')
+    .map((s) => normalizeUsername(s))
+    .filter(Boolean)
+);
+
+async function filterEligibleMembers(channel, members) {
+  const [admins, clientMe] = await Promise.all([
+    mproxy.fetchAdmins(channel).catch(() => []),
+    mproxy.me().catch(() => null),
+  ]);
+  const adminIds = new Set(admins.map((u) => String(u.user_id)));
+  const clientId = clientMe ? String(clientMe.user_id || clientMe.id) : null;
+  return members.filter((m) => {
+    const idStr = String(m.user_id);
+    const uname = normalizeUsername(m.username);
+    if (m.is_bot) return false;
+    if (EXCLUDED_USERNAMES.has(uname)) return false;
+    if (adminIds.has(idStr)) return false;
+    if (clientId && idStr === clientId) return false;
+    return true;
+  });
+}
+
 bot.start(async (ctx) => {
   await showMainMenu(
     ctx,
@@ -117,8 +146,8 @@ bot.command('draw', async (ctx) => {
   await ctx.reply(`Собираю участников канала ${channel}...`);
   try {
     const members = await mproxy.fetchMembers(channel, { limit: 100000 });
-    const humans = members.filter((m) => !m.is_bot);
-    const winners = pickUniqueRandom(humans, winnersCount);
+    const eligible = await filterEligibleMembers(channel, members);
+    const winners = pickUniqueRandom(eligible, winnersCount);
     if (!winners.length) {
       return ctx.reply('Не найдено участников для розыгрыша.');
     }
@@ -366,8 +395,8 @@ bot.on('text', async (ctx, next) => {
         const channel = st.data.channel;
         await ctx.reply(`Собираю участников канала ${channel}...`);
         const members = await mproxy.fetchMembers(channel, { limit: 100000 });
-        const humans = members.filter((m) => !m.is_bot);
-        const winners = pickUniqueRandom(humans, winnersCount);
+        const eligible = await filterEligibleMembers(channel, members);
+        const winners = pickUniqueRandom(eligible, winnersCount);
         if (!winners.length) {
           await ctx.reply('Не найдено участников для розыгрыша.', mainMenuKeyboard());
           return;

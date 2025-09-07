@@ -69,14 +69,19 @@ app.get('/me', async (req, res) => {
 app.get('/channels/:idOrUsername/members', async (req, res) => {
   try {
     const { idOrUsername } = req.params;
+    const role = String(req.query.role || '').toLowerCase();
     const limit = Math.min(parseInt(req.query.limit || '100', 10), 10000);
     const offset = parseInt(req.query.offset || '0', 10);
     const c = await ensureClient();
 
+    const filter = role === 'admins'
+      ? new Api.ChannelParticipantsAdmins({})
+      : new Api.ChannelParticipantsRecent({});
+
     const result = await c.invoke(
       new Api.channels.GetParticipants({
         channel: idOrUsername,
-        filter: new Api.ChannelParticipantsRecent({}),
+        filter,
         offset,
         limit,
         hash: 0,

@@ -49,6 +49,25 @@ export class MProxyClient {
     return members;
   }
 
+
+  async fetchAdmins(channelIdOrUsername, { limit = 10000, offset = 0 } = {}) {
+    if (!this.isEnabled()) {
+      throw new Error('MProxy is not configured');
+    }
+    const url = `${this.baseUrl}/channels/${encodeURIComponent(channelIdOrUsername)}/members?role=admins&limit=${limit}&offset=${offset}`;
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+        'Content-Type': 'application/json',
+      },
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`MProxy error ${res.status}: ${text}`);
+    }
+    return res.json();
+  }
+
   async joinTarget(target) {
     if (!this.isEnabled()) {
       throw new Error('MProxy is not configured');
