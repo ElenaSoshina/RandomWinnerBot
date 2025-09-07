@@ -41,7 +41,8 @@ if (agent) {
 
 const bot = new Telegraf(botToken, telegrafOptions);
 const mproxy = buildMProxyFromEnv();
-const ENABLE_POST_GIVEAWAY = (process.env.ENABLE_POST_GIVEAWAY || '').trim().toLowerCase() === 'true';
+const rawPostFlag = (process.env.ENABLE_POST_GIVEAWAY || '').trim().toLowerCase();
+const ENABLE_POST_GIVEAWAY = !['false', '0', 'no', 'off'].includes(rawPostFlag);
 
 // Register all bot handlers in a separate module
 registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway: ENABLE_POST_GIVEAWAY });

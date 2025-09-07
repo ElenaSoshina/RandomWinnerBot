@@ -12,6 +12,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           [
             { text: '👥 Список участников', callback_data: 'menu_members' },
             { text: '🎁 Розыгрыш', callback_data: 'menu_draw' },
+            ...(enablePostGiveaway ? [{ text: '🎯 Розыгрыш постом', callback_data: 'menu_draw_post' }] : []),
           ],
         ],
       },
@@ -29,7 +30,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       '👋 <b>Привет!</b> Я помогу собрать участников и провести розыгрыш.\n\n' +
         'Как это работает:\n' +
         '1) Нажмите «👥 Список участников» — укажите <b>username группы</b>. Я покажу полный список.\n' +
-        '2) Нажмите «🎁 Розыгрыш» — укажите <b>username группы</b> и <b>количество победителей</b>. После выбора появится кнопка «✉️ Написать победителям».\n\n' +
+        '2) Нажмите «🎁 Розыгрыш» — укажите <b>username группы</b> и <b>количество победителей</b>. После выбора появится кнопка «✉️ Написать победителям».\n' +
+        (enablePostGiveaway ? '3) Или «🎯 Розыгрыш постом» — опубликуйте пост с кнопкой «Участвовать» и укажите время завершения.\n\n' : '\n') +
         'ℹ️ Используйте <b>группу/обсуждение</b>, а не канал‑трансляцию.'
     );
   });
@@ -196,12 +198,23 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           return ctx.reply('Шаг 3. Отправьте текст поста розыгрыша (он будет опубликован с кнопкой «Участвовать»).');
         }
         if (st.step === 3) {
-          const { channel, winnersCount } = st.data;
-          const postText = text;
+          st.data.postText = text;
+          st.step = 4;
+          userState.set(ctx.from.id, st);
+          return ctx.reply('Шаг 4. Укажите время проведения розыгрыша в формате YYYY-MM-DD HH:mm (UTC) или отправьте now для немедленного завершения.');
+        }
+        if (st.step === 4) {
+          const whenStr = text.trim();
+          const ts = parseScheduleToTs(whenStr);
+          if (!ts) {
+            return ctx.reply('Не удалось распознать время. Пример: 2025-01-31 21:00 или now.');
+          }
+          const { channel, winnersCount, postText } = st.data;
           await ctx.reply('Публикую пост в канале...');
           const giveawayId = Math.random().toString(16).slice(2, 18);
+          const joinBtnText = '✅ Участвовать (0)';
           const msg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
-            reply_markup: { inline_keyboard: [[{ text: '✅ Участвовать', callback_data: `gwj:${giveawayId}` }]] },
+            reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
             disable_web_page_preview: true,
           }).catch(async (e) => {
             await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
@@ -214,10 +227,12 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             entries: new Set(),
             createdBy: ctx.from.id,
             text: postText,
+            scheduledAt: ts,
           });
           const finishToken = putEphemeral({ giveawayId });
-          await ctx.reply('Пост опубликован. Когда будете готовы — завершите розыгрыш.', {
-            reply_markup: { inline_keyboard: [[{ text: '🎉 Завершить розыгрыш', callback_data: `gwe:${finishToken}` }]] },
+          scheduleAutoFinish({ ctx, giveawayId, at: ts });
+          await ctx.reply(`Пост опубликован. Розыгрыш будет завершён по расписанию.`, {
+            reply_markup: { inline_keyboard: [[{ text: '🎉 Завершить сейчас', callback_data: `gwe:${finishToken}` }]] },
           });
           return showMainMenu(ctx, 'Готово. Розыгрыш запущен.');
         }
@@ -320,6 +335,12 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
     }
     g.entries.add(String(ctx.from.id));
+    const count = g.entries.size;
+    try {
+      await ctx.telegram.editMessageReplyMarkup(g.channel, g.messageId, undefined, {
+        inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${id}` }]],
+      });
+    } catch (e) {}
     return ctx.answerCbQuery('Вы участвуете!', { show_alert: false });
   });
 
@@ -329,18 +350,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     const data = getEphemeral(token);
     if (!data) return ctx.reply('Сессия завершения устарела.');
     const { giveawayId } = data;
-    const g = giveaways.get(giveawayId);
-    if (!g) return ctx.reply('Розыгрыш уже завершён.');
-    const participants = Array.from(g.entries).map((id) => ({ user_id: id }));
-    const winners = pickUniqueRandom(participants, g.winnersCount);
-    const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
-    await ctx.telegram.sendMessage(g.channel, `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}`, { disable_web_page_preview: true });
-    const ids = winners.map((u) => u.user_id);
-    const msgToken = putEphemeral(ids);
-    await ctx.reply('Розыгрыш завершён.', {
-      reply_markup: { inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${msgToken}` }]] },
-    });
-    giveaways.delete(giveawayId);
+    const ok = await finishGiveawayById({ botCtx: ctx, giveawayId });
+    if (!ok) return; // сообщения уже отправлены внутри
   });
 
   bot.catch((err, ctx) => {
@@ -348,6 +359,56 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   });
 
   return { showMainMenu };
+}
+
+function parseScheduleToTs(str) {
+  const s = String(str || '').trim().toLowerCase();
+  if (s === 'now' || s === 'сейчас') return Date.now();
+  // Accept formats: YYYY-MM-DD HH:mm or YYYY-MM-DDTHH:mm or full ISO
+  let parsed = Date.parse(s.includes(' ') && !s.includes('t') ? s.replace(' ', 'T') + (s.length === 16 ? ':00Z' : '') : s);
+  if (!Number.isFinite(parsed)) {
+    // try append Z if missing seconds
+    parsed = Date.parse(s + 'Z');
+  }
+  if (!Number.isFinite(parsed)) return 0;
+  return parsed;
+}
+
+async function finishGiveawayById({ botCtx, giveawayId }) {
+  const g = giveaways.get(giveawayId);
+  if (!g) {
+    await botCtx.reply('Розыгрыш уже завершён.');
+    return false;
+  }
+  const participants = Array.from(g.entries).map((id) => ({ user_id: id }));
+  const winners = pickUniqueRandom(participants, g.winnersCount);
+  const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
+  try {
+    await botCtx.telegram.sendMessage(g.channel, `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}`, { disable_web_page_preview: true });
+    // Disable join button
+    await botCtx.telegram.editMessageReplyMarkup(g.channel, g.messageId, undefined, {
+      inline_keyboard: [[{ text: `⏹ Участие закрыто (${g.entries.size})`, callback_data: 'noop' }]],
+    }).catch(() => {});
+  } catch (e) {
+    await botCtx.reply(`Ошибка публикации итогов: ${e.message}`);
+  }
+  const ids = winners.map((u) => u.user_id);
+  const msgToken = putEphemeral(ids);
+  await botCtx.reply('Розыгрыш завершён.', {
+    reply_markup: { inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${msgToken}` }]] },
+  });
+  giveaways.delete(giveawayId);
+  return true;
+}
+
+function scheduleAutoFinish({ ctx, giveawayId, at }) {
+  const delay = Math.max(0, at - Date.now());
+  const timer = setTimeout(async () => {
+    try {
+      await finishGiveawayById({ botCtx: ctx, giveawayId });
+    } catch (e) {}
+  }, delay);
+  timer.unref?.();
 }
 
 
