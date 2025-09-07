@@ -446,9 +446,11 @@ async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
   }
   const participants = Array.from(g.entries.values());
   const winners = pickUniqueRandom(participants, g.winnersCount);
-  const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
+  const list = winners.map((u, i) => `<b>${i + 1}</b>. ${formatUserLink(u)}`).join('\n');
   try {
-    await botCtx.telegram.sendMessage(g.channel, `Итоги розыгрыша:\n${list}`, {
+    const fancyHeader = '🎉 <b>Итоги розыгрыша</b> 🎉';
+    const fancyFooter = '\n\n🚀 Поздравляем победителей! Спасибо всем за участие!';
+    await botCtx.telegram.sendMessage(g.channel, `${fancyHeader}\n\n${list}${fancyFooter}`, {
       parse_mode: 'HTML',
       disable_web_page_preview: true,
     });
