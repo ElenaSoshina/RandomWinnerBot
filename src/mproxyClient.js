@@ -88,7 +88,7 @@ export class MProxyClient {
     return res.json();
   }
 
-  async sendMessages(userIds, text) {
+  async sendMessages(recipients, text) {
     if (!this.isEnabled()) {
       throw new Error('MProxy is not configured');
     }
@@ -99,7 +99,7 @@ export class MProxyClient {
         Authorization: `Bearer ${this.token}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ user_ids: userIds, text }),
+      body: JSON.stringify({ users: recipients, text }),
     });
     if (!res.ok) {
       const textRes = await res.text().catch(() => '');

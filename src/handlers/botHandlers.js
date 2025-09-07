@@ -84,11 +84,11 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     await ctx.answerCbQuery();
     if (!mproxy.isEnabled()) return ctx.reply('MTProto недоступен: не настроен MProxy.');
     const token = ctx.match.input.split(':')[1];
-    const ids = getEphemeral(token) || [];
-    if (!Array.isArray(ids) || ids.length === 0) {
+    const recipients = getEphemeral(token) || [];
+    if (!Array.isArray(recipients) || recipients.length === 0) {
       return ctx.reply('Список победителей пуст.');
     }
-    userState.set(ctx.from.id, { action: 'send_msg', step: 1, data: { ids } });
+    userState.set(ctx.from.id, { action: 'send_msg', step: 1, data: { recipients } });
     await ctx.reply('Введите текст сообщения для победителей:', {
       reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
     });
@@ -324,8 +324,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             return;
           }
           const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`);
-          const winnersIds = winners.map((u) => u.user_id);
-          const token = putEphemeral(winnersIds);
+          const token = putEphemeral(winners);
           await ctx.replyWithHTML(`Победители:\n${list.join('\n')}`, {
             disable_web_page_preview: true,
             reply_markup: {
@@ -349,10 +348,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       }
 
       if (st.action === 'send_msg') {
-        const ids = st.data.ids || [];
+        const recipients = st.data.recipients || [];
         const textMessage = text;
         await ctx.reply('Отправляю сообщения победителям...');
-        const result = await mproxy.sendMessages(ids, textMessage);
+        const result = await mproxy.sendMessages(recipients, textMessage);
         await ctx.reply(`Отправлено: ${result.sent}/${result.total}`);
         return showMainMenu(ctx, 'Готово.');
       }
