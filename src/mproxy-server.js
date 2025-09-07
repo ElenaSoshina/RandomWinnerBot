@@ -191,17 +191,18 @@ app.post('/channels/:idOrUsername/post', async (req, res) => {
     const { idOrUsername } = req.params;
     const { text, button_text: buttonText, url } = req.body || {};
     if (typeof text !== 'string' || !text.trim()) return res.status(400).json({ error: 'text is required' });
-    if (typeof buttonText !== 'string' || !buttonText.trim()) return res.status(400).json({ error: 'button_text is required' });
-    if (typeof url !== 'string' || !url.trim()) return res.status(400).json({ error: 'url is required' });
     const c = await ensureClient();
     const entity = await c.getEntity(idOrUsername);
-    const replyMarkup = new Api.ReplyInlineMarkup({
-      rows: [
-        new Api.KeyboardButtonRow({
-          buttons: [new Api.KeyboardButtonUrl({ text: buttonText, url })],
-        }),
-      ],
-    });
+    let replyMarkup;
+    if (typeof buttonText === 'string' && buttonText.trim() && typeof url === 'string' && url.trim()) {
+      replyMarkup = new Api.ReplyInlineMarkup({
+        rows: [
+          new Api.KeyboardButtonRow({
+            buttons: [new Api.KeyboardButtonUrl({ text: buttonText, url })],
+          }),
+        ],
+      });
+    }
     const result = await c.sendMessage(entity, { message: text, replyMarkup });
     const messageId = result?.id ?? result?.updates?.[0]?.id ?? null;
     return res.json({ ok: true, message_id: messageId });

@@ -254,6 +254,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           let botButtonMessageId = null;
           try {
             const botMsg = await ctx.telegram.sendMessage(channel, 'Нажмите кнопку ниже, чтобы участвовать:', {
+              reply_to_message_id: postRes.message_id,
               reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
               disable_web_page_preview: true,
             });
@@ -397,7 +398,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     const data = getEphemeral(token);
     if (!data) return ctx.reply('Сессия завершения устарела.');
     const { giveawayId } = data;
-    const ok = await finishGiveawayById({ botCtx: ctx, giveawayId });
+    const ok = await finishGiveawayById({ botCtx: ctx, giveawayId, mproxy });
     if (!ok) return; // сообщения уже отправлены внутри
   });
 
@@ -433,7 +434,7 @@ function parseScheduleToTs(str) {
   return ts;
 }
 
-async function finishGiveawayById({ botCtx, giveawayId }) {
+async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
   const g = giveaways.get(giveawayId);
   if (!g) {
     await botCtx.reply('Розыгрыш уже завершён.');
@@ -443,7 +444,8 @@ async function finishGiveawayById({ botCtx, giveawayId }) {
   const winners = pickUniqueRandom(participants, g.winnersCount);
   const list = winners.map((u, i) => `${i + 1}. ${formatUserLink(u)}`).join('\n');
   try {
-    await botCtx.telegram.sendMessage(g.channel, `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}`, { disable_web_page_preview: true });
+    // Публикуем итоги через клиента, чтобы избежать 403 для бота
+    await mproxy.postMessage(g.channel, { text: `Итоги розыгрыша (сообщение ${g.messageId}):\n${list}` });
     // Disable join button
     await botCtx.telegram.editMessageReplyMarkup(g.channel, g.messageId, undefined, {
       inline_keyboard: [[{ text: `⏹ Участие закрыто (${g.entries.size})`, callback_data: 'noop' }]],
