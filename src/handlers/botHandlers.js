@@ -1,5 +1,5 @@
 import { pickUniqueRandom } from '../giveaway.js';
-import { userState, giveaways, putEphemeral, getEphemeral } from '../state.js';
+import { userState, giveaways, putEphemeral, getEphemeral, appendHistory, readHistory, historyCount } from '../state.js';
 import { escapeHtml, formatUserLink, sendChunkedHtml, buildExcludedUsernamesFromEnv, filterEligibleMembers } from '../utils.js';
 
 export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway }) {
@@ -13,6 +13,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             { text: '👥 Список участников', callback_data: 'menu_members' },
             { text: '🎁 Розыгрыш', callback_data: 'menu_draw' },
             ...(enablePostGiveaway ? [{ text: '🎯 Розыгрыш постом', callback_data: 'menu_draw_post' }] : []),
+            [{ text: '📜 История', callback_data: 'menu_history' }],
           ],
         ],
       },
@@ -156,6 +157,26 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
       reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
     });
+  });
+
+  bot.action('menu_history', async (ctx) => {
+    await ctx.answerCbQuery();
+    userState.set(ctx.from.id, { action: 'history', step: 1, data: {} });
+    await ctx.reply('Введите username группы для просмотра истории (например, @group).', {
+      reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+    });
+  });
+
+  bot.action('history_more', async (ctx) => {
+    await ctx.answerCbQuery();
+    const st = userState.get(ctx.from.id);
+    if (!st || st.action !== 'history') {
+      return ctx.reply('Сессия истории не найдена. Нажмите «📜 История».');
+    }
+    // Триггерим повторный проход обработчика текста с текущими параметрами
+    const fakeText = st.data.channel;
+    ctx.message = { text: fakeText }; // небольшая имитация
+    return bot.handleUpdate(ctx.update);
   });
 
   bot.on('text', async (ctx, next) => {
@@ -353,6 +374,39 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
         return showMainMenu(ctx, 'Готово.');
       }
 
+      if (st.action === 'history') {
+        const channel = st.data.channel || text.trim();
+        if (!st.data.channel) {
+          st.data.channel = channel;
+          st.data.offset = 0;
+        }
+        const pageSize = 5;
+        const total = historyCount(channel);
+        const offset = st.data.offset || 0;
+        const items = readHistory({ channel, limit: pageSize, offset });
+        if (!items.length && offset === 0) {
+          await ctx.reply('История пуста для указанной группы.', mainMenuKeyboard());
+          return showMainMenu(ctx, 'Готово.');
+        }
+        const startIndex = Math.max(0, total - offset - items.length) + 1;
+        const lines = items.map((r, i) => {
+          const when = new Date(r.ts || r.time || Date.now()).toLocaleString('ru-RU');
+          const winnersFmt = (r.winners || []).map((u, idx) => `${idx + 1}. ${formatUserLink(u)}`).join('\n');
+          return `#${startIndex + i} — ${when}\nТекст: ${escapeHtml(r.text || '')}\nПобедители:\n${winnersFmt}`;
+        });
+        await sendChunkedHtml(ctx, lines);
+        const hasMore = offset + pageSize < total;
+        if (hasMore) {
+          st.data.offset = offset + pageSize;
+          userState.set(ctx.from.id, st);
+          await ctx.reply('Показать ещё?', {
+            reply_markup: { inline_keyboard: [[{ text: '⬇️ Ещё', callback_data: 'history_more' }, { text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+          });
+          return;
+        }
+        return showMainMenu(ctx, 'Готово.');
+      }
+
       if (st.action === 'send_msg') {
         const recipients = st.data.recipients || [];
         const textMessage = text;
@@ -465,6 +519,14 @@ async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
   const msgToken = putEphemeral(winners);
   await botCtx.reply('Розыгрыш завершён.', {
     reply_markup: { inline_keyboard: [[{ text: '✉️ Написать победителям', callback_data: `msg_winners:${msgToken}` }]] },
+  });
+  // Append to file-based history
+  appendHistory({
+    channel: g.channel,
+    messageId: g.botMessageId || g.messageId,
+    winnersCount: g.winnersCount,
+    winners,
+    text: g.text,
   });
   giveaways.delete(giveawayId);
   return true;

@@ -27,4 +27,47 @@ export function getEphemeral(token) {
   return entry.value;
 }
 
+// Simple file-based history (JSON lines) to avoid DB dependency
+import fs from 'fs';
+import path from 'path';
+
+const dataDir = path.resolve(process.cwd(), 'data');
+const historyFile = path.join(dataDir, 'history.jsonl');
+
+function ensureDataDir() {
+  try { fs.mkdirSync(dataDir, { recursive: true }); } catch {}
+}
+
+export function appendHistory(record) {
+  try {
+    ensureDataDir();
+    const line = JSON.stringify({ ...record, ts: Date.now() });
+    fs.appendFileSync(historyFile, line + '\n', 'utf8');
+  } catch {}
+}
+
+export function readHistory({ channel, limit = 10, offset = 0 } = {}) {
+  try {
+    if (!fs.existsSync(historyFile)) return [];
+    const lines = fs.readFileSync(historyFile, 'utf8').split('\n').filter(Boolean);
+    const items = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    const filtered = channel ? items.filter((r) => r.channel === channel) : items;
+    return filtered.slice(Math.max(0, filtered.length - offset - limit), filtered.length - offset);
+  } catch {
+    return [];
+  }
+}
+
+export function historyCount(channel) {
+  try {
+    if (!fs.existsSync(historyFile)) return 0;
+    const lines = fs.readFileSync(historyFile, 'utf8').split('\n').filter(Boolean);
+    const items = lines.map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+    if (!channel) return items.length;
+    return items.filter((r) => r.channel === channel).length;
+  } catch {
+    return 0;
+  }
+}
+
 
