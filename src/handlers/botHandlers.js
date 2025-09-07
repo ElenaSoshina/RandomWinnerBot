@@ -13,7 +13,9 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             { text: '👥 Список участников', callback_data: 'menu_members' },
             { text: '🎁 Розыгрыш', callback_data: 'menu_draw' },
             ...(enablePostGiveaway ? [{ text: '🎯 Розыгрыш постом', callback_data: 'menu_draw_post' }] : []),
-            [{ text: '📜 История', callback_data: 'menu_history' }],
+          ],
+          [
+            { text: '📜 История', callback_data: 'menu_history' },
           ],
         ],
       },
