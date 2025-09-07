@@ -249,9 +249,22 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             await ctx.reply(`Не удалось опубликовать пост: ${e.message}`);
             throw e;
           });
+          // Пытаемся опубликовать интерактивную кнопку от имени бота (если бот состоит в группе)
+          let botButtonMessageId = null;
+          try {
+            const botMsg = await ctx.telegram.sendMessage(channel, 'Нажмите кнопку ниже, чтобы участвовать:', {
+              reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
+              disable_web_page_preview: true,
+            });
+            botButtonMessageId = botMsg.message_id;
+          } catch (e) {
+            // бот не в группе — оставляем только URL‑кнопку клиента
+          }
+
           giveaways.set(giveawayId, {
             channel,
             messageId: postRes.message_id,
+            botMessageId: botButtonMessageId,
             winnersCount,
             entries: new Set(),
             createdBy: ctx.from.id,
@@ -368,6 +381,11 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     try {
       const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${id}`;
       await mproxy.editButton(g.channel, { messageId: g.messageId, buttonText: `✅ Участвовать (${count})`, url: deepLink });
+      if (g.botMessageId) {
+        await ctx.telegram.editMessageReplyMarkup(g.channel, g.botMessageId, undefined, {
+          inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${id}` }]],
+        }).catch(() => {});
+      }
     } catch (e) {}
     return ctx.answerCbQuery('Вы участвуете!', { show_alert: false });
   });
