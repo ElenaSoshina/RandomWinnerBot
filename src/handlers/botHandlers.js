@@ -273,8 +273,19 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   bot.action('target_default', async (ctx) => {
     await ctx.answerCbQuery();
     const st = userState.get(ctx.from.id);
-    if (!st || st.action !== 'ask_target') return;
-    return handleAskTarget(ctx, st, DEFAULT_GROUP);
+    if (!st) return;
+    // Автоподстановка для обычных сценариев выбора группы
+    if (st.action === 'ask_target') {
+      return handleAskTarget(ctx, st, DEFAULT_GROUP);
+    }
+    // Автоподстановка для розыгрыша по посту (шаг 1)
+    if (st.action === 'draw_post' && st.step === 1) {
+      st.data.channel = DEFAULT_GROUP;
+      st.step = 2;
+      userState.set(ctx.from.id, st);
+      return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+    }
+    return;
   });
 
   bot.on('text', async (ctx, next) => {
