@@ -33,9 +33,39 @@ const stringSession = new StringSession(providedSession);
 
 let client;
 
+function buildGramJsOptionsFromEnv() {
+  const options = { connectionRetries: 5 };
+  // SOCKS proxy support for GramJS
+  const socksUrlRaw = (process.env.SOCKS_PROXY || process.env.ALL_PROXY || '').trim();
+  if (socksUrlRaw) {
+    try {
+      const u = new URL(socksUrlRaw);
+      if (u.protocol.startsWith('socks')) {
+        options.proxy = {
+          ip: u.hostname,
+          port: Number(u.port || 1080),
+          socksType: u.protocol.includes('5') ? 5 : 4,
+          ...(u.username ? { username: decodeURIComponent(u.username) } : {}),
+          ...(u.password ? { password: decodeURIComponent(u.password) } : {}),
+        };
+      }
+    } catch (err) {
+      logger.warn({ err }, 'Invalid SOCKS proxy URL in SOCKS_PROXY/ALL_PROXY');
+    }
+  }
+  // Optional WSS transport (uses tcp/443), env: TG_USE_WSS=true
+  const useWssRaw = (process.env.TG_USE_WSS || process.env.USE_WSS || '').trim().toLowerCase();
+  const enableWss = ['true', '1', 'yes', 'on'].includes(useWssRaw);
+  if (enableWss) {
+    options.useWSS = true;
+  }
+  return options;
+}
+
 async function ensureClient() {
   if (client) return client;
-  client = new TelegramClient(stringSession, apiId, apiHash, { connectionRetries: 5 });
+  const gramOptions = buildGramJsOptionsFromEnv();
+  client = new TelegramClient(stringSession, apiId, apiHash, gramOptions);
   // Если сессия уже предоставлена, достаточно establish connection
   await client.connect();
   const authorized = await client.isUserAuthorized();
@@ -107,7 +137,12 @@ app.get('/channels/:idOrUsername/isMember', async (req, res) => {
   try {
     const { idOrUsername } = req.params;
     const c = await ensureClient();
-    const entity = await c.getEntity(idOrUsername);
+    let entity;
+    try {
+      entity = await c.getEntity(idOrUsername);
+    } catch (e) {
+      return res.status(404).json({ error: 'Target not found' });
+    }
     try {
       await c.invoke(new Api.channels.GetParticipant({
         channel: entity,

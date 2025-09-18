@@ -179,8 +179,16 @@ export class MProxyClient {
 }
 
 export function buildMProxyFromEnv() {
-  const baseUrl = (process.env.MPROXY_BASE_URL || '').trim();
+  let baseUrl = (process.env.MPROXY_BASE_URL || '').trim();
   const token = (process.env.MPROXY_TOKEN || '').trim();
+  // If embedded server is enabled but no baseUrl, default to localhost
+  const rawFlag = (process.env.ENABLE_MPROXY || '').trim().toLowerCase();
+  const normalizedFlag = rawFlag.replace(/^["']|["']$/g, '');
+  const enableMproxy = ['true', '1', 'yes', 'on'].includes(normalizedFlag);
+  if (!baseUrl && enableMproxy) {
+    const port = parseInt(process.env.MPROXY_PORT || '8081', 10);
+    baseUrl = `http://127.0.0.1:${port}`;
+  }
   return new MProxyClient({ baseUrl, token });
 }
 
