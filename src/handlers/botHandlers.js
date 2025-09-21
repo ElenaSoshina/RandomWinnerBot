@@ -312,7 +312,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           st.data.winnersCount = num;
           st.step = 3;
           userState.set(ctx.from.id, st);
-          return ctx.reply('Шаг 3. Отправьте текст поста розыгрыша (он будет опубликован с кнопкой «Участвовать»).');
+          return ctx.reply('Шаг 3. Отправьте текст поста или фото с подписью (будет опубликовано с кнопкой «Участвовать»).');
         }
         if (st.step === 3) {
           st.data.postText = text;
@@ -343,16 +343,24 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             }
             ts = tsParsed;
           }
-          const { channel, winnersCount, postText } = st.data;
+          const { channel, winnersCount, postText, photoId } = st.data;
           await ctx.reply('Публикую пост в канале от имени бота...');
           const giveawayId = Math.random().toString(16).slice(2, 18);
           const joinBtnText = '✅ Участвовать (0)';
           let botButtonMessageId = null;
           try {
-            const botMsg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
-              reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
-              disable_web_page_preview: true,
-            });
+            let botMsg;
+            if (photoId) {
+              botMsg = await ctx.telegram.sendPhoto(channel, photoId, {
+                caption: `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`,
+                reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
+              });
+            } else {
+              botMsg = await ctx.telegram.sendMessage(channel, `${postText}\n\nНажмите кнопку ниже, чтобы участвовать:`, {
+                reply_markup: { inline_keyboard: [[{ text: joinBtnText, callback_data: `gwj:${giveawayId}` }]] },
+                disable_web_page_preview: true,
+              });
+            }
             botButtonMessageId = botMsg.message_id;
           } catch (e) {
             await ctx.reply('Не удалось опубликовать пост от имени бота. Добавьте бота в группу и дайте право писать сообщения.');
@@ -498,6 +506,34 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     }
 
     return next();
+  });
+
+  // Принимаем фото/документ на шаге 3, используем подпись как текст поста
+  bot.on(['photo', 'document'], async (ctx, next) => {
+    const st = userState.get(ctx.from.id);
+    if (!st || st.action !== 'draw_post' || st.step !== 3) return next();
+    try {
+      const caption = (ctx.message.caption || '').trim();
+      if (!caption) {
+        return ctx.reply('Добавьте подпись к медиа — это и будет текст поста.');
+      }
+      let fileId = null;
+      if (ctx.message.photo && Array.isArray(ctx.message.photo) && ctx.message.photo.length) {
+        fileId = ctx.message.photo[ctx.message.photo.length - 1].file_id;
+      } else if (ctx.message.document && ctx.message.document.mime_type?.startsWith('image/')) {
+        fileId = ctx.message.document.file_id;
+      }
+      if (!fileId) {
+        return ctx.reply('Поддерживаются фото или изображения как документ. Попробуйте отправить изображение.');
+      }
+      st.data.postText = caption;
+      st.data.photoId = fileId;
+      st.step = 4;
+      userState.set(ctx.from.id, st);
+      return ctx.reply('Шаг 4. Укажите дату проведения (МСК), например: 16 сентября.');
+    } catch (err) {
+      await ctx.reply(`Ошибка обработки медиа: ${err.message}`);
+    }
   });
 
   bot.action(/gwj:.+/, async (ctx) => {
