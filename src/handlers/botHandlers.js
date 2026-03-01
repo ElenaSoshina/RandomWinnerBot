@@ -24,6 +24,23 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     };
   }
 
+  async function askDrawPostChannel(ctx, errorText = '') {
+    const prefix = errorText
+      ? `❌ ${errorText}\n\n`
+      : '';
+    return ctx.reply(
+      `${prefix}Шаг 1. Укажите канал/группу в формате @username (например, @my_group), где будет опубликован розыгрыш.\nВведите значение ещё раз:`,
+      {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
+            [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
+          ],
+        },
+      }
+    );
+  }
+
   async function showMainMenu(ctx, text = 'Главное меню') {
     userState.delete(ctx.from.id);
     await ctx.replyWithHTML(text, mainMenuKeyboard());
@@ -65,12 +82,32 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     return n;
   }
 
+  function isValidTelegramUsername(value) {
+    const target = String(value || '').trim();
+    return /^@[A-Za-z0-9_]{4,}$/.test(target);
+  }
+
+  function isValidChannelRef(value) {
+    const s = String(value || '').trim();
+    return isValidTelegramUsername(s) || /^-?\d+$/.test(s);
+  }
+
+  function drawPostWinnersPrompt(errorText = '') {
+    const prefix = errorText ? `❌ ${errorText}\n\n` : '';
+    return `${prefix}Шаг 2. Укажите количество победителей (целое число от 1 до 1000).\nВведите значение ещё раз:`;
+  }
+
+  function drawWinnersPrompt(errorText = '') {
+    const prefix = errorText ? `❌ ${errorText}\n\n` : '';
+    return `${prefix}Шаг 2/2. Укажите количество победителей (целое число от 1 до 1000).`;
+  }
+
   async function validatePostTarget(ctx, rawTarget) {
     const target = String(rawTarget || '').trim();
     if (!target) {
       return { ok: false, error: 'Введите username канала/группы в формате @channel.' };
     }
-    if (!/^@[A-Za-z0-9_]{4,}$/.test(target)) {
+    if (!isValidTelegramUsername(target)) {
       return { ok: false, error: 'Некорректный username. Пример: @my_group' };
     }
     try {
@@ -150,6 +187,9 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   }
 
   async function handleAskTarget(ctx, st, target) {
+    if (!isValidTelegramUsername(target)) {
+      return ctx.reply('Некорректный username. Используйте формат @group_name и введите ещё раз.');
+    }
     await ctx.reply('Проверяю права и подключение...');
     const botMe = await ctx.telegram.getMe();
     const clientMe = await mproxy.me().catch(() => null);
@@ -182,7 +222,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     }
     if (st.nextAction === 'draw') {
       userState.set(ctx.from.id, { action: 'draw', step: 2, data: { channel: target } });
-      return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+      return ctx.reply(drawWinnersPrompt());
     }
     return undefined;
   }
@@ -232,6 +272,9 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       return ctx.reply('Использование: /draw <@channel|id> <кол-во_победителей>');
     }
     const channel = parts[1];
+    if (!isValidChannelRef(channel)) {
+      return ctx.reply('Некорректный канал. Используйте @channel_username или числовой id.');
+    }
     const winnersCount = parsePositiveIntInRange(parts[2], { min: 1, max: 1000 });
     if (!winnersCount) {
       return ctx.reply('Количество победителей должно быть целым числом от 1 до 1000.');
@@ -328,12 +371,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       return ctx.reply('Розыгрыш по посту временно отключён.');
     }
     userState.set(ctx.from.id, { action: 'draw_post', step: 1, data: {} });
-    await ctx.reply('Шаг 1. Введите username канала/группы, где опубликовать пост розыгрыша.', {
-      reply_markup: { inline_keyboard: [
-        [{ text: DEFAULT_GROUP, callback_data: 'target_default' }],
-        [{ text: '⬅️ В меню', callback_data: 'menu_main' }],
-      ] },
-    });
+    await askDrawPostChannel(ctx);
   });
 
   bot.action('menu_history', async (ctx) => {
@@ -406,7 +444,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     if (st.action === 'draw_post' && st.step === 1) {
       const targetValidation = await validatePostTarget(ctx, DEFAULT_GROUP);
       if (!targetValidation.ok) {
-        return ctx.reply(targetValidation.error);
+        return askDrawPostChannel(ctx, targetValidation.error);
       }
       st.data.channel = targetValidation.channel;
       st.step = 2;
@@ -432,17 +470,17 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
         if (st.step === 1) {
           const targetValidation = await validatePostTarget(ctx, text);
           if (!targetValidation.ok) {
-            return ctx.reply(targetValidation.error);
+            return askDrawPostChannel(ctx, targetValidation.error);
           }
           st.data.channel = targetValidation.channel;
           st.step = 2;
           userState.set(ctx.from.id, st);
-          return ctx.reply('Шаг 2. Укажите количество победителей (число).');
+          return ctx.reply(drawPostWinnersPrompt());
         }
         if (st.step === 2) {
           const num = parsePositiveIntInRange(text, { min: 1, max: 1000 });
           if (!num) {
-            return ctx.reply('Некорректное количество победителей. Введите целое число от 1 до 1000.');
+            return ctx.reply(drawPostWinnersPrompt('Некорректное количество победителей.'));
           }
           st.data.winnersCount = num;
           st.step = 3;
@@ -557,12 +595,17 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
           st.data.channel = text;
           st.step = 2;
           userState.set(ctx.from.id, st);
-          return ctx.reply('Шаг 2/2. Укажите количество победителей (число).', {
+          return ctx.reply(drawWinnersPrompt(), {
             reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
           });
         }
         if (st.step === 2) {
-          const winnersCount = Math.max(1, parseInt(text, 10) || 1);
+          const winnersCount = parsePositiveIntInRange(text, { min: 1, max: 1000 });
+          if (!winnersCount) {
+            return ctx.reply(drawWinnersPrompt('Некорректное количество победителей.'), {
+              reply_markup: { inline_keyboard: [[{ text: '⬅️ В меню', callback_data: 'menu_main' }]] },
+            });
+          }
           const channel = st.data.channel;
           await ctx.reply(`Собираю участников канала ${channel}...`);
           const members = await mproxy.fetchMembers(channel, { limit: 100000 });
