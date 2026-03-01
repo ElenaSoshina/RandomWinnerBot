@@ -57,6 +57,42 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     }
   }
 
+  function parsePositiveIntInRange(raw, { min = 1, max = 1000 } = {}) {
+    const s = String(raw || '').trim();
+    if (!/^\d+$/.test(s)) return 0;
+    const n = parseInt(s, 10);
+    if (n < min || n > max) return 0;
+    return n;
+  }
+
+  async function validatePostTarget(ctx, rawTarget) {
+    const target = String(rawTarget || '').trim();
+    if (!target) {
+      return { ok: false, error: 'Введите username канала/группы в формате @channel.' };
+    }
+    if (!/^@[A-Za-z0-9_]{4,}$/.test(target)) {
+      return { ok: false, error: 'Некорректный username. Пример: @my_group' };
+    }
+    try {
+      const chat = await ctx.telegram.getChat(target);
+      const botMe = await ctx.telegram.getMe();
+      const member = await ctx.telegram.getChatMember(chat.id, botMe.id).catch(() => null);
+      if (!member || ['left', 'kicked'].includes(member.status)) {
+        return { ok: false, error: 'Бот не добавлен в этот чат. Добавьте бота и попробуйте снова.' };
+      }
+      if (chat.type === 'channel' && !['creator', 'administrator'].includes(member.status)) {
+        return { ok: false, error: 'Для канала у бота должны быть права администратора на публикацию.' };
+      }
+      if (member.status === 'restricted' && member.can_send_messages === false) {
+        return { ok: false, error: 'У бота нет права отправки сообщений в этом чате.' };
+      }
+      const normalized = chat.username ? `@${chat.username}` : target;
+      return { ok: true, channel: normalized };
+    } catch (err) {
+      return { ok: false, error: 'Не удалось найти чат. Проверьте username и доступ бота.' };
+    }
+  }
+
   async function registerGiveawayEntry({ ctx, giveawayId, referrerId = '' }) {
     const g = giveaways.get(giveawayId);
     if (!g) return { ok: false, reason: 'not_found' };
@@ -196,7 +232,10 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
       return ctx.reply('Использование: /draw <@channel|id> <кол-во_победителей>');
     }
     const channel = parts[1];
-    const winnersCount = Math.max(1, parseInt(parts[2], 10) || 1);
+    const winnersCount = parsePositiveIntInRange(parts[2], { min: 1, max: 1000 });
+    if (!winnersCount) {
+      return ctx.reply('Количество победителей должно быть целым числом от 1 до 1000.');
+    }
     await ctx.reply(`Собираю участников канала ${channel}...`);
     try {
       const members = await mproxy.fetchMembers(channel, { limit: 100000 });
@@ -365,7 +404,11 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     }
     // Автоподстановка для розыгрыша по посту (шаг 1)
     if (st.action === 'draw_post' && st.step === 1) {
-      st.data.channel = DEFAULT_GROUP;
+      const targetValidation = await validatePostTarget(ctx, DEFAULT_GROUP);
+      if (!targetValidation.ok) {
+        return ctx.reply(targetValidation.error);
+      }
+      st.data.channel = targetValidation.channel;
       st.step = 2;
       userState.set(ctx.from.id, st);
       return ctx.reply('Шаг 2. Укажите количество победителей (число).');
@@ -387,13 +430,20 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
 
       if (st.action === 'draw_post') {
         if (st.step === 1) {
-          st.data.channel = text;
+          const targetValidation = await validatePostTarget(ctx, text);
+          if (!targetValidation.ok) {
+            return ctx.reply(targetValidation.error);
+          }
+          st.data.channel = targetValidation.channel;
           st.step = 2;
           userState.set(ctx.from.id, st);
           return ctx.reply('Шаг 2. Укажите количество победителей (число).');
         }
         if (st.step === 2) {
-          const num = Math.max(1, parseInt(text, 10) || 1);
+          const num = parsePositiveIntInRange(text, { min: 1, max: 1000 });
+          if (!num) {
+            return ctx.reply('Некорректное количество победителей. Введите целое число от 1 до 1000.');
+          }
           st.data.winnersCount = num;
           st.step = 3;
           userState.set(ctx.from.id, st);
@@ -752,6 +802,13 @@ function parseMskDateTime(dateStr, timeStr) {
   const hour = parseInt(mTime[1], 10);
   const minute = parseInt(mTime[2], 10);
   const second = mTime[3] ? parseInt(mTime[3], 10) : 0;
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59 || second < 0 || second > 59) return 0;
+  const checkDate = new Date(Date.UTC(year, month, day));
+  if (
+    checkDate.getUTCFullYear() !== year ||
+    checkDate.getUTCMonth() !== month ||
+    checkDate.getUTCDate() !== day
+  ) return 0;
   // Treat as MSK (UTC+3)
   const ts = Date.UTC(year, month, day, hour - 3, minute, second, 0);
   return ts;
@@ -776,9 +833,15 @@ function parseRusDateToISO(input) {
   if (!m) return '';
   const day = parseInt(m[1], 10);
   const month = months[m[2]];
-  if (month === undefined) return '';
+  if (month === undefined || day < 1 || day > 31) return '';
   const now = new Date();
   const year = now.getUTCFullYear();
+  const checkDate = new Date(Date.UTC(year, month, day));
+  if (
+    checkDate.getUTCFullYear() !== year ||
+    checkDate.getUTCMonth() !== month ||
+    checkDate.getUTCDate() !== day
+  ) return '';
   const mm = String(month + 1).padStart(2, '0');
   const dd = String(day).padStart(2, '0');
   return `${year}-${mm}-${dd}`;
