@@ -237,7 +237,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
         const cleanReferrerId = String(referrerId || '').replace(/[^0-9]/g, '');
         pendingReferrals.set(uid, { giveawayId, referrerId: cleanReferrerId, ts: Date.now() });
         await ctx.reply(
-          'Чтобы стать участником, подпишитесь на канал и нажмите кнопку «✅ Участвовать».',
+          'Чтобы стать участником, подпишитесь на канал @self_detail и нажмите кнопку «✅ Участвовать».',
           {
             reply_markup: {
               inline_keyboard: [[{ text: '✅ Участвовать', callback_data: `gwj:${giveawayId}` }]],
