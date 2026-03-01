@@ -1,4 +1,4 @@
-import { pickUniqueRandom } from '../giveaway.js';
+import { pickUniqueRandom, pickUniqueWeighted } from '../giveaway.js';
 import { userState, giveaways, putEphemeral, getEphemeral, appendHistory, readHistory, historyCount } from '../state.js';
 import { escapeHtml, formatUserLink, sendChunkedHtml, buildExcludedUsernamesFromEnv, filterEligibleMembers } from '../utils.js';
 
@@ -26,6 +26,64 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   async function showMainMenu(ctx, text = 'Главное меню') {
     userState.delete(ctx.from.id);
     await ctx.replyWithHTML(text, mainMenuKeyboard());
+  }
+
+  function parseStartPayload(payload) {
+    const sepIdx = payload.indexOf('_');
+    if (sepIdx === -1) return { giveawayId: payload, referrerId: '' };
+    return {
+      giveawayId: payload.slice(0, sepIdx),
+      referrerId: payload.slice(sepIdx + 1),
+    };
+  }
+
+  function buildEntryUser(ctx) {
+    return {
+      user_id: String(ctx.from.id),
+      username: ctx.from.username || null,
+      first_name: ctx.from.first_name || null,
+      last_name: ctx.from.last_name || null,
+    };
+  }
+
+  async function registerGiveawayEntry({ ctx, giveawayId, referrerId = '' }) {
+    const g = giveaways.get(giveawayId);
+    if (!g) return { ok: false, reason: 'not_found' };
+    if (!(g.referrerByInvitee instanceof Map)) g.referrerByInvitee = new Map();
+    if (!(g.referralsByUser instanceof Map)) g.referralsByUser = new Map();
+
+    const user = buildEntryUser(ctx);
+    const uid = String(user.user_id);
+    const wasNewParticipant = !g.entries.has(uid);
+    if (wasNewParticipant) g.entries.set(uid, user);
+
+    const normalizedReferrerId = String(referrerId || '').replace(/[^0-9]/g, '');
+    if (wasNewParticipant && normalizedReferrerId) {
+      if (normalizedReferrerId !== uid && g.entries.has(normalizedReferrerId) && !g.referrerByInvitee.has(uid)) {
+        g.referrerByInvitee.set(uid, normalizedReferrerId);
+        const refs = g.referralsByUser.get(normalizedReferrerId) || new Set();
+        refs.add(uid);
+        g.referralsByUser.set(normalizedReferrerId, refs);
+      }
+    }
+
+    const count = g.entries.size;
+    if (g.botMessageId) {
+      await ctx.telegram.editMessageReplyMarkup(g.channel, g.botMessageId, undefined, {
+        inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${giveawayId}` }]],
+      }).catch(() => {});
+    }
+
+    const botMe = await ctx.telegram.getMe();
+    const deepLink = `https://t.me/${botMe.username}?start=${giveawayId}_${uid}`;
+    const ownReferrals = g.referralsByUser.get(uid)?.size || 0;
+    await ctx.telegram.sendMessage(
+      ctx.from.id,
+      `Вы участвуете в розыгрыше!\n\nВаша реферальная ссылка:\n${deepLink}\n\nПриглашено друзей: ${ownReferrals}`,
+      { disable_web_page_preview: true }
+    ).catch(() => {});
+
+    return { ok: true, wasNewParticipant };
   }
 
   async function handleAskTarget(ctx, st, target) {
@@ -67,24 +125,15 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
   }
 
   bot.start(async (ctx) => {
-    // deep-link регистрация участия в розыгрыше по start=<giveawayId>
+    // deep-link регистрация участия в розыгрыше по start=<giveawayId>[_<referrerId>]
     const payload = (ctx.startPayload || '').trim();
-    if (payload && giveaways.has(payload)) {
-      const g = giveaways.get(payload);
-      const uid = String(ctx.from.id);
-      g.entries.set(uid, {
-        user_id: uid,
-        username: ctx.from.username || null,
-        first_name: ctx.from.first_name || null,
-        last_name: ctx.from.last_name || null,
-      });
-      const count = g.entries.size;
-      try {
-        const deepLink = `https://t.me/${(await ctx.telegram.getMe()).username}?start=${payload}`;
-        await mproxy.editButton(g.channel, { messageId: g.messageId, buttonText: `✅ Участвовать (${count})`, url: deepLink });
-      } catch (e) {}
-      await ctx.reply('Вы участвуете в розыгрыше!');
-      return;
+    if (payload) {
+      const { giveawayId, referrerId } = parseStartPayload(payload);
+      const regResult = await registerGiveawayEntry({ ctx, giveawayId, referrerId });
+      if (regResult.ok) {
+        await ctx.reply(regResult.wasNewParticipant ? 'Вы участвуете в розыгрыше!' : 'Вы уже участвуете в розыгрыше.');
+        return;
+      }
     }
     await showMainMenu(
       ctx,
@@ -373,6 +422,8 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
             botMessageId: botButtonMessageId,
             winnersCount,
             entries: new Map(),
+            referrerByInvitee: new Map(),
+            referralsByUser: new Map(),
             createdBy: ctx.from.id,
             text: postText,
             scheduledAt: ts,
@@ -538,29 +589,14 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
 
   bot.action(/gwj:.+/, async (ctx) => {
     const id = ctx.match.input.split(':')[1];
-    const g = giveaways.get(id);
-    if (!g) {
+    if (!giveaways.has(id)) {
       return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
     }
-    // ensure unique participation
-    {
-      const uid = String(ctx.from.id);
-      g.entries.set(uid, {
-        user_id: uid,
-        username: ctx.from.username || null,
-        first_name: ctx.from.first_name || null,
-        last_name: ctx.from.last_name || null,
-      });
+    const regResult = await registerGiveawayEntry({ ctx, giveawayId: id });
+    if (!regResult.ok) {
+      return ctx.answerCbQuery('Розыгрыш не найден или завершён', { show_alert: true });
     }
-    const count = g.entries.size;
-    try {
-      if (g.botMessageId) {
-        await ctx.telegram.editMessageReplyMarkup(g.channel, g.botMessageId, undefined, {
-          inline_keyboard: [[{ text: `✅ Участвовать (${count})`, callback_data: `gwj:${id}` }]],
-        }).catch(() => {});
-      }
-    } catch (e) {}
-    return ctx.answerCbQuery('Вы участвуете!', { show_alert: false });
+    return ctx.answerCbQuery(regResult.wasNewParticipant ? 'Вы участвуете!' : 'Вы уже участвуете!', { show_alert: false });
   });
 
   bot.action(/gwe:.+/, async (ctx) => {
@@ -569,7 +605,7 @@ export function registerBotHandlers({ bot, mproxy, logger, enablePostGiveaway })
     const data = getEphemeral(token);
     if (!data) return ctx.reply('Сессия завершения устарела.');
     const { giveawayId } = data;
-    const ok = await finishGiveawayById({ botCtx: ctx, giveawayId, mproxy });
+    const ok = await finishGiveawayById({ botCtx: ctx, giveawayId });
     if (!ok) return; // сообщения уже отправлены внутри
   });
 
@@ -605,14 +641,18 @@ function parseScheduleToTs(str) {
   return ts;
 }
 
-async function finishGiveawayById({ botCtx, giveawayId, mproxy }) {
+async function finishGiveawayById({ botCtx, giveawayId }) {
   const g = giveaways.get(giveawayId);
   if (!g) {
     await botCtx.reply('Розыгрыш уже завершён.');
     return false;
   }
   const participants = Array.from(g.entries.values());
-  const winners = pickUniqueRandom(participants, g.winnersCount);
+  const winners = pickUniqueWeighted(
+    participants,
+    g.winnersCount,
+    (u) => 1 + (g.referralsByUser?.get(String(u.user_id))?.size || 0)
+  );
   const list = winners.map((u, i) => `<b>${i + 1}</b>. ${formatUserLink(u)}`).join('\n');
   try {
     const fancyHeader = '🎉 <b>Итоги розыгрыша</b> 🎉';
