@@ -825,14 +825,21 @@ async function finishGiveawayById({ botCtx, giveawayId }) {
   return true;
 }
 
+const MAX_SET_TIMEOUT_MS = 2_147_000_000; // чуть меньше лимита JS-таймера
+
 function scheduleAutoFinish({ ctx, giveawayId, at }) {
-  const delay = Math.max(0, at - Date.now());
-  const timer = setTimeout(async () => {
-    try {
-      await finishGiveawayById({ botCtx: ctx, giveawayId });
-    } catch (e) {}
-  }, delay);
-  timer.unref?.();
+  const tick = () => {
+    if (!giveaways.has(giveawayId)) return;
+    const remaining = at - Date.now();
+    if (remaining <= 0) {
+      finishGiveawayById({ botCtx: ctx, giveawayId }).catch(() => {});
+      return;
+    }
+    const delay = Math.min(remaining, MAX_SET_TIMEOUT_MS);
+    const timer = setTimeout(tick, delay);
+    timer.unref?.();
+  };
+  tick();
 }
 
 function parseMskDateTime(dateStr, timeStr) {
